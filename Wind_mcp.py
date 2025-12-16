@@ -77,5 +77,65 @@ def get_index_members(index_code: str) -> str:
         return f"指数 {index_code} 共有 {total_count} 只成分股，前 50 只如下：\n{df_display.to_string(index=False)}"
     return f"Wind WSET 查询失败，错误码: {res[0]}"
 
+@mcp.tool()
+def get_futures_contract_chain(
+    product_code: str,
+    startdate: str = "",
+    enddate: str = ""
+) -> str:
+    """
+    获取指定期货品种在给定时间区间内的期货合约列表（期货合约链）。
+
+    :param product_code: Wind 期货品种代码，例如：
+        - A.DCE   黄大豆1号
+        - IF.CFE  沪深300股指期货
+        - RB.SHF  螺纹钢
+    :param startdate: 开始日期 YYYYMMDD，默认为今天
+    :param enddate: 结束日期 YYYYMMDD，默认为一年后
+    """
+    ok, msg = ensure_wind()
+    if not ok:
+        return msg
+
+    today = datetime.now()
+    if not startdate:
+        startdate = today.strftime("%Y%m%d")
+    if not enddate:
+        enddate = today.replace(year=today.year + 1).strftime("%Y%m%d")
+
+    params = (
+        f"startdate={startdate};"
+        f"enddate={enddate};"
+        f"wind_code={product_code};"
+    )
+
+    res = w.wset("futurecc", params, usedf=True)
+
+    if res[0] != 0:
+        return f"Wind WSET(futurecc) 查询失败，错误码: {res[0]}"
+
+    df = res[1]
+    if df is None or df.empty:
+        return f"未获取到 {product_code} 的期货合约链数据"
+
+    cols = [
+        "sec_name",
+        "wind_code",
+        "delivery_month",
+        "contract_issue_date",
+        "last_trade_date",
+        "last_delivery_month",
+        "change_limit",
+        "target_margin",
+    ]
+    show_cols = [c for c in cols if c in df.columns]
+    df_show = df[show_cols]
+
+    return (
+        f"期货品种 {product_code} 在 {startdate} ~ {enddate} 的合约链如下（共 {len(df)} 条）：\n"
+        f"{df_show.to_string(index=False)}"
+    )
+
 if __name__ == "__main__":
+
     mcp.run()
