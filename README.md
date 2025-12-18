@@ -1,48 +1,111 @@
-# UBS TTM-FinAI: AI-Powered Market Intelligence
+# AI-Powered Market Intelligence
 
-## 项目目标
-将非结构化的**市场叙事**转化为可执行的**量化信号**，为客户经理提供基于当前持仓的风险提示与调仓建议。
+**A Financial Intelligence Agent powered by Gemini & Model Context Protocol (MCP)**
 
-## 系统架构
-项目采用模块化架构，由以下三层组成：
+## Project Overview
 
-1.  **决策层 (Brain)**: LangGraph + LLM，负责逻辑编排与推理。
-2.  **连接层 (MCP Client)**: 管理 LLM 与数据源的交互。
-3.  **数据层 (MCP Servers)**: 独立的数据服务（行情、资讯、持仓）。
+本项目是一个面向 Risk Manager 和 Trader 的智能辅助系统。它不只是简单的新闻摘要工具，而是致力于构建一个**语义-因子映射层 (Semantic-Factor Mapping Layer)**。
 
-## 业务逻辑
-系统遵循以下推理链条：
-1.  **感知**: 获取实时新闻资讯。
-2.  **量化**: 对资讯进行情绪打分。
-3.  **关联**: 获取相关资产行情与指标。
-4.  **推理**: 测算新闻事件对相关资产价格的量化影响。
-5.  **诊断**: 扫描客户持仓，计算风险敞口。
-6.  **决策**: 生成具体的调仓建议。
+系统利用 **Google Gemini** 的推理能力，结合 **Model Context Protocol (MCP)** 架构，实时连接市场数据与新闻流，将定性的市场情绪（Market Color）转化为定量的风险指标（Risk Indicators），如情绪得分、因子偏度预测和波动率预警。
 
-## 项目规划
+### 核心价值
 
-### Phase 1: 基础设施与数据层
-**目标**: 完成所有 MCP Servers 的开发与互联，构建标准化的数据“工具箱”。
-* **Market Data Server**:
-    * 提供 Stock/Index/Index Future 的行情与指标数据。
-* **News Server**:
-    * 提供实时财经资讯文本。
-* **Position Server**:
-    * 提供当前投资组合持仓数据。
-* **MCP Client Integration**:
-    * 完成 Client 端配置，确保 LLM 可识别并调用上述 3 个 Server 的所有工具。
+* **From Text to Metric:** 将 "谣言驱动上涨" 转化为 "Low Confidence, High Reversal Risk"。
+* **Asset Coverage:** 优先覆盖 **A股股票、核心指数 (CSI300/CSI500) 及 指数期货 (IF/IC/IM)**。
+* **Architecture:** 基于微服务化的 MCP 架构，解耦 LLM 与数据源。
 
-### Phase 2: 逻辑编排与智能分析
-**目标**: 利用 **LangGraph** 编排多步推理工作流，实现核心业务逻辑闭环。
-* **Step 1: 市场情绪量化**:
-    * 调用 News Server 获取资讯。
-    * 利用 LLM 对新闻事件进行打分，并识别受影响资产。
-* **Step 2: 影响评估**:
-    * 自动调用 Market Data Server 获取受影响资产的行情/指标。
-    * 推理逻辑：结合 *情绪分值* 与 *资产弹性*，预测资产价格波动区间 (如“预计下跌 2%-4%”)。
-* **Step 3: 持仓诊断与决策**:
-    * 调用 Position Server 获取客户持仓数据，计算受影响资产的风险敞口。
-    * 生成最终建议：输出具体的调仓指令 (如“建议减仓半导体 10%”)。
+---
 
-### Phase 3: 用户界面与可视化
-**目标**: 构建面向客户经理的交互终端与可视化报表。
+## System Architecture
+
+本项目基于 **Model Context Protocol (MCP)** 标准构建，确保数据源的可扩展性。
+
+![img.png](img.png)
+
+* **LLM Provider:** Google Gemini (via LangChain/LangGraph) - 负责逻辑推理与语义分析。
+* **Orchestrator:** LangGraph - 管理多轮对话状态与工具调用链。
+* **MCP Client:** 负责与各数据服务通信。
+* **MCP Servers:**
+* `mcp-server-market`: 获取行情数据 (Price, Volume, OI) - 覆盖股票/期货。
+* `mcp-server-news`: 获取实时财经新闻与公告。
+* `mcp-server-position`: 管理模拟持仓与风险敞口。
+
+
+
+---
+
+## Project Roadmap & Delivery Timeline
+
+### Phase 1: Infrastructure & Data connectivity (Dec 19 - Dec 24)
+
+**目标:** 完成 MCP Server 搭建，打通 Gemini 与行情的连接。
+
+* 搭建 `mcp-server-market`，接入 A 股/期货行情 (CSI300, IF合约)。
+* 搭建 `mcp-server-news`，接入基础财经新闻流。
+* 配置 LangGraph + Gemini 基础环境。
+
+> **Milestone (Dec 25): 基础问答能力**
+> * **User:** "Show me the latest price and volume for CSI300 futures (IF2501)."
+> * **Agent:** Calls MCP tool -> Returns real-time data.
+> * **User:** "What are the latest headlines about 'Lithium batteries'?"
+> * **Agent:** Calls News tool -> Returns list of raw news.
+> 
+> 
+
+### Phase 2: Sentiment Analysis & Mid-Term Demo (Dec 25 - Dec 30)
+
+**目标:** **中期检查交付点。** 实现“新闻 -> 情绪打分”的闭环。
+
+* 实现 `Sentiment Scoring` Prompt Chain (Direction -10 to +10, Confidence 0-1)。
+* 初步实现新闻与具体标的（Ticker）的关联。
+
+> **Milestone (Dec 30 - Mid-Term Check): 语义理解能力**
+> * **User:** "Summarize the overnight market color for the EV sector."
+> * **Agent:** "Sentiment is **Positive (+7)** but fragile. Driven by subsidy rumors (Confidence: **Low 0.4**)."
+> * **User:** "Why is the confidence low?"
+> * **Agent:** "Because the source is unverified social media, implying higher volatility risk."
+> 
+> 
+
+### Phase 3: Factor Mapping & Quant Indicators (Dec 31 - Jan 5)
+
+**目标:** 核心难点突破。将情绪映射到 Barra 风格因子 (Momentum, Size, Volatility)。
+
+* 开发 `Factor Mapping` 逻辑：文本 -> 因子归类。
+* 引入 `mcp-server-position`，结合持仓给出建议。
+
+> **Milestone (Jan 5): 因子量化能力**
+> * **User:** "How does today's tech rally affect my generic risk factors?"
+> * **Agent:** "It triggers a **Momentum** positive skew. However, expect **Volatility** to increase by 1.5x due to external divergence."
+> 
+> 
+
+### Phase 4: Final Polish & Dashboard (Jan 6 - Jan 10)
+
+**目标:** 最终交付。UI 优化与复杂场景测试。
+
+* 完善 Streamlit 前端 UI（展示仪表盘）。
+* 综合测试：从新闻输入到最终 Risk Report 的完整链路。
+
+> **Milestone (Jan 10 - Final Delivery): 完整智能体**
+> * **User:** "I hold a long position in IF2501. Given the credit tightening news, what should I watch out for?"
+> * **Agent:** "Warning: **Liquidity Stress** detected. Credit tightening historically hits the **Leverage Factor**. Recommendation: Monitor the spread between IF and spot; consider hedging if basis widens beyond -10bps."
+> 
+> 
+
+---
+
+## Tech Stack
+
+* **Language:** Python 3.10+
+* **LLM:** Google Gemini
+* **Frameworks:**
+* `langchain` / `langgraph`: Agent orchestration.
+* `mcp`: Model Context Protocol implementation.
+
+
+* **Data Sources (MCP Servers):**
+* *AkShare / Wind API* (Market Data & News)
+
+
+* **UI:** Streamlit
