@@ -44,7 +44,7 @@
 * 搭建 `mcp-server-news`，接入基础财经新闻流。
 * 配置 LangGraph + Gemini 基础环境。
 
-> **Milestone (Dec 25): 基础问答能力**
+> **Milestone (Dec 21): 基础问答能力**
 > * **User:** "Show me the latest price and volume for CSI300 futures (IF2501)."
 > * **Agent:** Calls MCP tool -> Returns real-time data.
 > * **User:** "What are the latest headlines about 'Lithium batteries'?"
@@ -59,7 +59,7 @@
 * 实现 `Sentiment Scoring` Prompt Chain (Direction -10 to +10, Confidence 0-1)。
 * 初步实现新闻与具体标的（Ticker）的关联。
 
-> **Milestone (Dec 30 - Mid-Term Check): 语义理解能力**
+> **Milestone (Dec 25): 语义理解能力**
 > * **User:** "Summarize the overnight market color for the EV sector."
 > * **Agent:** "Sentiment is **Positive (+7)** but fragile. Driven by subsidy rumors (Confidence: **Low 0.4**)."
 > * **User:** "Why is the confidence low?"
@@ -74,7 +74,7 @@
 * 开发 `Factor Mapping` 逻辑：文本 -> 因子归类。
 * 引入 `mcp-server-position`，结合持仓给出建议。
 
-> **Milestone (Jan 5): 因子量化能力**
+> **Milestone (TBD): 因子量化能力**
 > * **User:** "How does today's tech rally affect my generic risk factors?"
 > * **Agent:** "It triggers a **Momentum** positive skew. However, expect **Volatility** to increase by 1.5x due to external divergence."
 > 
