@@ -87,7 +87,7 @@
 * 完善 Streamlit 前端 UI（展示仪表盘）。
 * 综合测试：从新闻输入到最终 Risk Report 的完整链路。
 
-> **Milestone (Jan 10 - Final Delivery): 完整智能体**
+> **Milestone (Dec 30): 完整智能体**
 > * **User:** "I hold a long position in IF2501. Given the credit tightening news, what should I watch out for?"
 > * **Agent:** "Warning: **Liquidity Stress** detected. Credit tightening historically hits the **Leverage Factor**. Recommendation: Monitor the spread between IF and spot; consider hedging if basis widens beyond -10bps."
 > 
