@@ -36,7 +36,7 @@
 
 ## Project Roadmap & Delivery Timeline
 
-### Phase 1: Infrastructure & Data connectivity (Dec 19 - Dec 24)
+### Phase 1: Infrastructure & Data connectivity (Dec 21)
 
 **目标:** 完成 MCP Server 搭建，打通 Gemini 与行情的连接。
 
@@ -52,7 +52,7 @@
 > 
 > 
 
-### Phase 2: Sentiment Analysis & Mid-Term Demo (Dec 25 - Dec 30)
+### Phase 2: Sentiment Analysis & Mid-Term Demo (Dec 25)
 
 **目标:** **中期检查交付点。** 实现“新闻 -> 情绪打分”的闭环。
 
@@ -67,7 +67,7 @@
 > 
 > 
 
-### Phase 3: Factor Mapping & Quant Indicators (Dec 31 - Jan 5)
+### Phase 3: Factor Mapping & Quant Indicators
 
 **目标:** 核心难点突破。将情绪映射到 Barra 风格因子 (Momentum, Size, Volatility)。
 
@@ -80,7 +80,7 @@
 > 
 > 
 
-### Phase 4: Final Polish & Dashboard (Jan 6 - Jan 10)
+### Phase 4: Final Polish & Dashboard (Dec 30)
 
 **目标:** 最终交付。UI 优化与复杂场景测试。
 
