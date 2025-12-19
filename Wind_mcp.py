@@ -136,6 +136,107 @@ def get_futures_contract_chain(
         f"{df_show.to_string(index=False)}"
     )
 
+@mcp.tool()
+def get_futures_snapshot(symbols: str, timeout_sec: int = 1) -> str:
+    """
+    获取一个或多个期货合约的最新快照行情。
+
+    说明：
+    :param symbols: 期货合约代码字符串，多个用逗号分隔，例如：
+        - IF2503.CFE,IH2503.CFE
+    :param timeout_sec: 等待 WSQ 推送的超时秒数（默认 5 秒）
+    """
+    ok, msg = ensure_wind()
+    if not ok:
+        return msg
+
+    codes = ",".join([s.strip() for s in symbols.split(",") if s.strip()])
+    if not codes:
+        return "symbols 不能为空"
+
+    # 实时字段集合（可按需增减）
+    wsq_fields = "rt_last,rt_pre_close,rt_chg,rt_pct_chg,rt_vol,rt_oi,rt_open,rt_high,rt_low"
+
+    evt = threading.Event()
+    captured = {"indata": None, "err": None}
+
+    def _cb(indata):
+        # 仅捕获第一条推送
+        if captured["indata"] is None:
+            captured["indata"] = indata
+            evt.set()
+
+    # 1) 优先：WSQ 订阅并等待第一条推送
+    try:
+        req = w.wsq(codes, wsq_fields, func=_cb)
+        # 等待推送
+        evt.wait(timeout=max(1, int(timeout_sec)))
+
+        if captured["indata"] is not None:
+            indata = captured["indata"]
+            # indata 的结构通常为 Codes / Fields / Data
+            try:
+                # 将 Data 转成更易读的表格
+                df = pd.DataFrame(indata.Data, index=indata.Fields).T
+                df.index = indata.Codes
+                return (
+                    "WSQ 订阅已收到推送（实时快照）：\n"
+                    f"{df.to_string()}"
+                )
+            except Exception:
+                return f"WSQ 订阅已收到推送（原始数据）：\n{indata}"
+
+        # 尝试取消订阅（不同 WindPy 版本方法名可能不同，尽量容错）
+        try:
+            if hasattr(w, "cancelRequest"):
+                w.cancelRequest(req)
+            elif hasattr(w, "cancel"):
+                w.cancel(req)
+        except Exception:
+            pass
+
+    except Exception as e:
+        captured["err"] = str(e)
+
+    # 2) 如果 WSQ 未收到推送：回退到 WSS 静态字段（非实时）
+    # 对期货更常用的静态字段包括 pre_settle/settle/oi 等；并且在非交易时段建议显式指定 tradeDate 为最近交易日。
+    static_fields = "sec_name,pre_close,pre_settle,close,settle,chg,pct_chg,volume,oi,open,high,low"
+
+    # 计算最近交易日（尽量用 Wind 交易日历）
+    try:
+        today_str = datetime.now().strftime("%Y-%m-%d")
+        td = w.tdaysoffset(0, today_str, "", usedf=True)
+        # td[1] 是 DataFrame，第一行第一列是最近交易日
+        trade_date = td[1].iloc[0, 0].strftime("%Y%m%d")
+    except Exception:
+        trade_date = datetime.now().strftime("%Y%m%d")
+
+    res3 = w.wss(codes, static_fields, f"tradeDate={trade_date}", usedf=True)
+    if res3[0] == 0:
+        df3 = res3[1]
+        if df3 is None or df3.empty:
+            return (
+                "WSQ 在超时内未收到推送，且 WSS 静态字段也无数据。\n"
+                f"请检查合约代码/权限：{codes}"
+            )
+        extra = f"\n（WSQ 等待超时 {timeout_sec}s 未收到推送）"
+        if captured["err"]:
+            extra += f"\n（WSQ 调用异常：{captured['err']}）"
+        return "已返回 WSS 静态字段（非实时）：\n" + df3.to_string() + extra + f"\n（tradeDate={trade_date}）"
+
+    # 3) 最后：给出更可操作的错误信息
+    detail = f"WSQ 在超时内未收到推送（{timeout_sec}s）。"
+    if captured["err"]:
+        detail += f" WSQ 调用异常：{captured['err']}。"
+    detail += f" WSS 静态字段错误码：{res3[0]}。"
+    return (
+        "获取期货快照失败。\n"
+        + detail
+        + "\n建议：1）确认当前为交易时段；2）确认 Wind 终端已登录并且 WSQ 面板能看到该合约跳价；"
+          "3）确认合约代码为活跃合约（可先用 get_futures_contract_chain 查询）。"
+    )
+
 if __name__ == "__main__":
 
     mcp.run()
+
