@@ -3,6 +3,7 @@ import pandas as pd
 from datetime import datetime
 from WindPy import w
 from mcp.server.fastmcp import FastMCP
+import threading
 
 mcp = FastMCP(
     name="Wind_Terminal_Analyst",
@@ -137,6 +138,52 @@ def get_futures_contract_chain(
     )
 
 @mcp.tool()
+def get_comprehensive_analysis(symbol: str) -> str:
+    """
+    一键获取股票的核心基本面、技术面和估值快照。
+    :param symbol: 股票代码，如 '600519.SH'
+    """
+    ok, msg = ensure_wind()
+    if not ok: return msg
+    
+    today = datetime.now().strftime("%Y-%m-%d")
+    # 整合所有分析师关心的核心指标
+    # 估值：PE, 市值 | 盈利：ROE | 成长：营收同比 | 技术：5日均线, RSI
+    fields = "sec_name,pe_ttm,mkt_cap_ard,roe_ttm,yoyrevenue,MA,RSI"
+    # 注意：MA 和 RSI 的参数要在 options 里定义
+    options = f"tradeDate={today};maDays=5;rsiDays=6"
+    
+    res = w.wss(symbol, fields, options, usedf=True)
+    if res[0] == 0:
+        return f"股票 {symbol} 深度诊断报告 ({today})：\n{res[1].to_string()}"
+    return f"查询失败，错误码: {res[0]}"
+
+@mcp.tool()
+def get_macro_indicator(indicator_name: str) -> str:
+    """
+    查询宏观经济指标（如 CPI、十年期国债收益率）。
+    :param indicator_name: 指标名称，如 'CPI' 或 'Treasury'
+    """
+    ok, msg = ensure_wind()
+    if not ok: return msg
+    
+    # 建立一个常用宏观代码字典，方便 AI 使用
+    macro_map = {
+        "CPI": "S0025244",           # 中国CPI:当月同比
+        "Treasury": "M0000185",      # 中债国债到期收益率:10年
+        "M2": "M0000162",            # M2:同比增长
+        "USDCNY": "M0000185"         # 美元兑人民币中间价
+    }
+    
+    code = macro_map.get(indicator_name, indicator_name) # 找不到就按原代码查
+    end_date = datetime.now().strftime("%Y-%m-%d")
+    res = w.edb(code, "-90D", end_date, usedf=True) # 宏观建议查90天
+    
+    if res[0] == 0:
+        return f"宏观数据 {indicator_name} ({code}) 近期走势：\n{res[1].tail(10).to_string()}"
+    return f"宏观查询失败: {res[0]}"
+
+@mcp.tool()
 def get_futures_snapshot(symbols: str, timeout_sec: int = 1) -> str:
     """
     获取一个或多个期货合约的最新快照行情。
@@ -239,4 +286,5 @@ def get_futures_snapshot(symbols: str, timeout_sec: int = 1) -> str:
 if __name__ == "__main__":
 
     mcp.run()
+
 
