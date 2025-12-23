@@ -67,7 +67,7 @@
 > 
 > 
 
-### Phase 3: Factor Mapping & Quant Indicators
+### Phase 3: Factor Mapping & Quant Indicators (optional)
 
 **目标:** 核心难点突破。将情绪映射到 Barra 风格因子 (Momentum, Size, Volatility)。
 
@@ -85,7 +85,7 @@
 **目标:** 最终交付。UI 优化与复杂场景测试。
 
 * 完善 Streamlit 前端 UI（展示仪表盘）。
-* 综合测试：从新闻输入到最终 Risk Report 的完整链路。
+* 综合测试：从新闻输入到最终回答生成的完整链路。
 
 > **Milestone (Dec 30): 完整智能体**
 > * **User:** "I hold a long position in IF2501. Given the credit tightening news, what should I watch out for?"
