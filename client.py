@@ -6,7 +6,7 @@ import warnings
 from contextlib import AsyncExitStack
 from typing import Any, Type, List, Dict, Union
 
-# 屏蔽特定警告 (必须在导入 langgraph 之前)
+# 屏蔽特定警告
 warnings.filterwarnings("ignore", message=".*create_react_agent.*")
 warnings.filterwarnings("ignore", category=UserWarning, module="langgraph")
 warnings.filterwarnings("ignore", category=DeprecationWarning)
@@ -23,7 +23,7 @@ from langgraph.checkpoint.memory import MemorySaver
 
 # --- 全局配置 ---
 # 请确保此处路径正确
-PYTHON_PATH = r"D:\Anaconda\envs\UBS\python.exe"
+PYTHON_PATH = os.getenv("MCP_PYTHON_PATH", sys.executable)
 
 SERVER_SCRIPTS = {
     "MarketData": "mcp_server_marketdata.py",
