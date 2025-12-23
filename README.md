@@ -56,12 +56,12 @@
 
 **目标:** **中期检查交付点。** 实现“新闻 -> 情绪打分”的闭环。
 
-* 实现 `Sentiment Scoring` Prompt Chain (Direction -10 to +10, Confidence 0-1)。
-* 初步实现新闻与具体标的（Ticker）的关联。
+* 实现 `Sentiment Scoring` Prompt Chain (Direction -10 to +10, Confidence 0-1)。  
+* 初步实现新闻与具体标的资产（Ticker）的关联，并量化新闻情绪对标的资产的影响。
 
 > **Milestone (Dec 25): 语义理解能力**
-> * **User:** "Summarize the overnight market color for the EV sector."
-> * **Agent:** "Sentiment is **Positive (+7)** but fragile. Driven by subsidy rumors (Confidence: **Low 0.4**)."
+> * **User:** "Summarize the overnight market color and its impact for the EV sector."  
+> * **Agent:** "Sentiment is **Positive (+7)** but fragile. Expect a sector gain of 1%-3% (Confidence: **Low 0.4**)"
 > * **User:** "Why is the confidence low?"
 > * **Agent:** "Because the source is unverified social media, implying higher volatility risk."
 > 
