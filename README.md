@@ -38,60 +38,38 @@
 
 ### Phase 1: Infrastructure & Data connectivity (Dec 21)
 
-**目标:** 完成 MCP Server 搭建，打通 Gemini 与行情的连接。
+* **目标:** 完成基础架构搭建。部署 MCP Server 以连接 Gemini 与市场行情及新闻数据源。
+* **User Visibility:**
+  * **User:** “给我最近大盘走势以及重要财经新闻。”
+  * **Agent:** 准确返回相关行情数据以及原始财经新闻列表。
 
-* 搭建 `mcp-server-market`，接入 A 股/期货行情 (CSI300, IF合约)。
-* 搭建 `mcp-server-news`，接入基础财经新闻流。
-* 配置 LangGraph + Gemini 基础环境。
+### Phase 2: Market Color & Measurable Indicators (Dec 25)
 
-> **Milestone (Dec 21): 基础问答能力**
-> * **User:** "Show me the latest price and volume for CSI300 futures (IF2501)."
-> * **Agent:** Calls MCP tool -> Returns real-time data.
-> * **User:** "What are the latest headlines about 'Lithium batteries'?"
-> * **Agent:** Calls News tool -> Returns list of raw news.
-> 
-> 
+* **目标:** 落地 **场景 A (Market Color)**。将定性的新闻转化为**可度量的指标** (情绪分数、置信度)。
+* **User Visibility:**
+  * **User:** “给我今天的市场情绪摘要 (Market Color Summary)。”
+  * **Agent:**
+    * “**宏观:** 新闻总结 xxx (Sentiment Score: xx, Confidence Level: xx)”
+    * “**板块:** 新闻总结 xxx (Sentiment Score: xx, Confidence Level: xx)”
 
-### Phase 2: Sentiment Analysis & Mid-Term Demo (Dec 25)
+### Phase 3: Factor "Watchlist" & Risk Logic (Dec 28)
 
-**目标:** **中期检查交付点。** 实现“新闻 -> 情绪打分”的闭环。
-
-* 实现 `Sentiment Scoring` Prompt Chain (Direction -10 to +10, Confidence 0-1)。  
-* 初步实现新闻与具体标的资产（Ticker）的关联，并量化新闻情绪对标的资产的影响。
-
-> **Milestone (Dec 25): 语义理解能力**
-> * **User:** "Summarize the overnight market color and its impact for the EV sector."  
-> * **Agent:** "Sentiment is **Positive (+7)** but fragile. Expect a sector gain of 1%-3% (Confidence: **Low 0.4**)"
-> * **User:** "Why is the confidence low?"
-> * **Agent:** "Because the source is unverified social media, implying higher volatility risk."
-> 
-> 
-
-### Phase 3: Factor Mapping & Quant Indicators (optional)
-
-**目标:** 核心难点突破。将情绪映射到 Barra 风格因子 (Momentum, Size, Volatility)。
-
-* 开发 `Factor Mapping` 逻辑：文本 -> 因子归类。
-* 引入 `mcp-server-position`，结合持仓给出建议。
-
-> **Milestone (TBD): 因子量化能力**
-> * **User:** "How does today's tech rally affect my generic risk factors?"
-> * **Agent:** "It triggers a **Momentum** positive skew. However, expect **Volatility** to increase by 1.5x due to external divergence."
-> 
-> 
+* **目标:** 落地 **场景 B (Factor Watchlist)**。重点在于将新闻事件映射到 **风险因子** (如动量、规模、波动率)。
+* **User Visibility:**
+  * **User:** “根据市场情绪，给我今天的因子观察清单 (Factor Watchlist) ”
+  * **Agent:**
+    * “**动量因子 (Momentum):** 风险: xxx, 预期: 收益 xx, 夏普率 xx, ...”
+    * “**市值因子 (Size):** 风险: xxx, 预期: 收益 xx, 夏普率：xx, ...”
+    * “**波动率因子 (Volatility):** 风险: xxx, 预期: 收益 xx, 夏普率 xx, ...”
 
 ### Phase 4: Final Polish & Dashboard (Dec 30)
 
-**目标:** 最终交付。UI 优化与复杂场景测试。
-
-* 完善 Streamlit 前端 UI（展示仪表盘）。
-* 综合测试：从新闻输入到最终回答生成的完整链路。
-
-> **Milestone (Dec 30): 完整智能体**
-> * **User:** "I hold a long position in IF2501. Given the credit tightening news, what should I watch out for?"
-> * **Agent:** "Warning: **Liquidity Stress** detected. Credit tightening historically hits the **Leverage Factor**. Recommendation: Monitor the spread between IF and spot; consider hedging if basis widens beyond -10bps."
-> 
-> 
+* **目标:** 接入持仓数据，提供风险建议与相关指标的可视化展示。
+* **User Visibility:**
+  * **User:** “根据目前我的持仓情况，有哪些风险点？”
+  * **Agent:**
+    * “**风险:** xxx”
+    * “**建议:** xxx”
 
 ---
 
