@@ -1,161 +1,311 @@
-from mcp.server.fastmcp import FastMCP
-import akshare as ak
-import pandas as pd
-from datetime import datetime, timedelta
+import sys
+import io
 import re
+from datetime import datetime, timedelta
+import pandas as pd
+import akshare as ak
+from mcp.server.fastmcp import FastMCP
 
-# --- LLM 指令配置 ---
+# --- 环境适配：强制标准输出为 UTF-8 ---
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+
+# --- LLM 系统指令 ---
 INSTRUCTIONS = """
-金融行情助手，提供个股、指数、指数期货、行业板块行情数据。
-所有接口均返回 CSV 格式，包含: Date, Open, Close, High, Low, Volume, Pct。
-调用规则：
-1. period (周期): 格式如 "5d"(近5交易日), "20d"(近1月)。严禁使用具体日期。
-2. symbol (代码):
+金融行情助手，提供 A 股个股、指数、指数期货、行业板块、ETF 基金的历史行情与实时行情数据。
+所有接口均返回 CSV 格式，历史行情均包含: Date, Open, Close, High, Low, Volume, Pct。
+
+历史行情调用规则：
+1. period (回溯周期): 格式如 "5d"(近5交易日), "20d"(近1月)。
+2. symbol (资产代码):
    - 个股: 6位数字，如 "600519"。
-   - 指数: 带市场前缀，如 "sh000001" (上证), "sz399006" (创业板)。
+   - 指数: 小写前缀+6位数字，如 "sh000001"。
    - 指数期货: 大写品种+年月，如 "IF2406"。
-   - 行业板块: 标准中文名称，如 "半导体", "酿酒行业"。若不确定名称，先调 get_sector_list。
+   - 行业板块: 标准中文名称，如 "半导体"。若不确定名称，必须调用 get_sector_list 查询。
+   - ETF 基金: 6位数字，如 "510300"。若不确定代码，必须调用 get_etf_list 查询。
+
+实时行情调用规则：
+1. 个股、ETF、行业板块: 返回前 top_n 条，按涨跌幅排序，当 top_n 取较大值时，返回全部列表，可用于查找正确代码或名称。
+2. 指数、指数期货: 返回全部列表，可用于查找正确代码。
 """
 
 mcp = FastMCP(name="MarketData", instructions=INSTRUCTIONS)
 
 
-# --- 核心处理逻辑 ---
+# --- 辅助函数 ---
 
 def get_date_window(period: str) -> tuple[str, str, int]:
-    """解析 period 计算时间窗口，放大回溯天数以确保交易日足够"""
-    limit = int(re.match(r"(\d+)", period).group(1)) if re.match(r"\d+", period) else 10
-    # 放大系数 1.8 + 10天冗余，确保覆盖假期并能计算首日涨跌幅
-    lookback = int(limit * 1.8) + 10
+    """解析 period 获取时间窗口 (start, end, limit)"""
+    # 提取数字，默认为 10
+    match = re.search(r"(\d+)", str(period))
+    limit = int(match.group(1)) if match else 10
+
+    # 放大回溯天数以覆盖非交易日
+    lookback = int(limit * 2.0) + 15
     end_dt = datetime.now()
     start_dt = end_dt - timedelta(days=lookback)
+
     return start_dt.strftime("%Y%m%d"), end_dt.strftime("%Y%m%d"), limit
 
 
 def process_df(df: pd.DataFrame, limit: int) -> str:
-    """统一清洗数据：重命名列 -> 计算涨跌幅 -> 格式化输出"""
-    # 映射各接口不统一的列名
+    """通用数据清洗、排序与格式化"""
+    if df.empty:
+        return "Info: No data found."
+
+    df = df.copy()
+
+    # 1. 统一列名映射
     col_map = {
         '日期': 'Date', 'date': 'Date',
         '开盘': 'Open', 'open': 'Open',
-        '收盘': 'Close', 'close': 'Close',
+        '收盘': 'Close', 'close': 'Close', '最新价': 'Close',
         '最高': 'High', 'high': 'High',
         '最低': 'Low', 'low': 'Low',
         '成交量': 'Volume', 'volume': 'Volume',
-        '涨跌幅': 'Pct', 'pct_chg': 'Pct'
+        '涨跌幅': 'Pct', 'pct_chg': 'Pct', '涨跌幅(%)': 'Pct'
     }
     df = df.rename(columns=col_map)
 
-    # 统一日期格式
+    # 2. 确保日期格式统一并排序
     if 'Date' in df.columns:
-        df['Date'] = pd.to_datetime(df['Date']).dt.strftime('%Y-%m-%d')
+        try:
+            df['Date'] = pd.to_datetime(df['Date'])
+            df = df.sort_values(by='Date', ascending=True)
+            df['Date'] = df['Date'].dt.strftime('%Y-%m-%d')
+        except Exception:
+            pass
 
-    # 确保数值列为 float
-    num_cols = ['Open', 'Close', 'High', 'Low', 'Volume']
+    # 3. 数值转换
+    num_cols = ['Open', 'Close', 'High', 'Low', 'Volume', 'Pct']
     for c in num_cols:
         if c in df.columns:
             df[c] = pd.to_numeric(df[c], errors='coerce')
 
-    # 补全涨跌幅 (指数/期货接口可能不返回 Pct)
+    # 4. 补全 Pct 列
     if 'Pct' not in df.columns and 'Close' in df.columns:
         df['Pct'] = df['Close'].pct_change() * 100
-
-    # 填充 NaN (通常是第一天的 Pct)
-    if 'Pct' in df.columns:
         df['Pct'] = df['Pct'].fillna(0.0)
 
-    # 动态筛选存在的列
+    # 5. 筛选与截取
     target_cols = ['Date', 'Open', 'Close', 'High', 'Low', 'Volume', 'Pct']
     valid_cols = [c for c in target_cols if c in df.columns]
 
-    # 截取数据
-    if 'Date' in df.columns:
-        return df[valid_cols].tail(limit).to_csv(index=False, float_format='%.2f')
+    final_df = df[valid_cols]
+
+    # 有日期则取最后 N 条(最新)，无日期(榜单)取前 N 条
+    if 'Date' in final_df.columns:
+        return final_df.tail(limit).to_csv(index=False, float_format='%.2f')
     else:
-        # 针对榜单类数据
-        return df[valid_cols].head(limit).to_csv(index=False, float_format='%.2f')
+        return final_df.head(limit).to_csv(index=False, float_format='%.2f')
 
 
-# --- MCP 工具定义 ---
+# --- 工具定义 ---
 
 @mcp.tool()
 def get_stock_daily(symbol: str, period: str = "5d") -> str:
-    """获取 A股个股 历史行情。symbol: 6位数字 (e.g. 600519)"""
+    """获取 A股个股 历史行情。symbol: 6位数字，如 600519)"""
     symbol = re.sub(r"\D", "", symbol)
     start, end, limit = get_date_window(period)
     try:
-        df = ak.stock_zh_a_hist(symbol=symbol, period="daily", start_date=start, end_date=end, adjust="qfq")
-        if df is None or df.empty: return "Error: No data found."
+        df = ak.stock_zh_a_hist(
+            symbol=symbol,
+            period="daily",
+            start_date=start,
+            end_date=end,
+            adjust="qfq"
+        )
         return process_df(df, limit)
     except Exception as e:
-        return f"Error: {str(e)}. Use correct symbol."
+        return f"Error: {str(e)}. Check symbol validity using get_stock_list."
+
+
+@mcp.tool()
+def get_stock_list(top_n: int = 50) -> str:
+    """
+    获取 A股个股 实时行情，按涨跌幅排序，取前 top_n 支股票。
+    当 top_n 取 6000 以上时，返回全部股票列表，可以用于查找正确的股票代码。
+    """
+    try:
+        df = ak.stock_zh_a_spot_em()
+        if df is None or df.empty:
+            return "Error: List unavailable."
+        df.sort_values(by='涨跌幅', ascending=False, inplace=True)
+        df = df.rename(columns={'名称': 'Name',
+                                '代码': 'Symbol',
+                                '最新价': 'Price',
+                                '成交量': 'Volume',
+                                '涨跌幅': 'Pct',
+                                '市盈率-动态': 'PE'})
+        df0 = df[['Name', 'Symbol', 'Price', 'Volume', 'Pct', 'PE']]
+        return df0.head(top_n).to_csv(index=False, float_format='%.2f')
+    except Exception as e:
+        return f"Error: {str(e)}"
 
 
 @mcp.tool()
 def get_index_daily(symbol: str, period: str = "5d") -> str:
-    """获取 A股指数 历史行情。symbol: 带前缀 (e.g. sh000001)"""
+    """
+    获取 A股指数 历史行情。symbol: 小写前缀+6位数字，如 sh000001
+    前缀取值范围 {sz: 深交所, sh: 上交所, bj: 北交所, csi: 中证指数}
+    """
     start, end, limit = get_date_window(period)
     try:
         df = ak.stock_zh_index_daily_em(symbol=symbol)
-        if df is None or df.empty: return "Error: Invalid symbol."
+        if df is None or df.empty:
+            return "Error: Symbol not found."
 
-        # 本地日期过滤
-        df['date'] = pd.to_datetime(df['date']).dt.strftime('%Y%m%d')
-        df = df[(df['date'] >= start) & (df['date'] <= end)].copy()
+        # 本地日期过滤 (接口返回全量数据)
+        df['date'] = pd.to_datetime(df['date'])
+        start_dt = pd.to_datetime(start, format='%Y%m%d')
+        end_dt = pd.to_datetime(end, format='%Y%m%d')
+        df = df[(df['date'] >= start_dt) & (df['date'] <= end_dt)]
 
-        if df.empty: return "Error: No data in period."
         return process_df(df, limit)
     except Exception as e:
-        return f"Error: {str(e)}. Use correct symbol."
+        return f"Error: {str(e)}. Check symbol validity using get_index_list."
+
+
+@mcp.tool()
+def get_index_list(symbol: str) -> str:
+    """
+    获取 A股指数 实时行情，按涨跌幅排序，可以用于查找正确的指数代码。
+    symbol: 指数类型的中文名称，取值范围 {"沪深重要指数", "上证系列指数", "深证系列指数", "指数成份", "中证系列指数"}
+    """
+    try:
+        df = ak.stock_zh_index_spot_em(symbol=symbol)
+        if df is None or df.empty:
+            return "Error: List unavailable."
+        df.sort_values(by='涨跌幅', ascending=False, inplace=True)
+        df = df.rename(columns={'名称': 'Name',
+                                '代码': 'Symbol',
+                                '最新价': 'Price',
+                                '成交量': 'Volume',
+                                '涨跌幅': 'Pct'})
+        df0 = df[['Name', 'Symbol', 'Price', 'Volume', 'Pct']]
+        return df0.to_csv(index=False, float_format='%.2f')
+    except Exception as e:
+        return f"Error: {str(e)}"
 
 
 @mcp.tool()
 def get_futures_daily(symbol: str, period: str = "5d") -> str:
-    """获取 指数期货 历史行情。symbol: 大写 (e.g. IF2406)"""
+    """
+    获取 指数期货 历史行情。symbol: 大写品种+年月，如 IF2512
+    """
     symbol = symbol.upper()
     start, end, limit = get_date_window(period)
     try:
         df = ak.futures_zh_daily_sina(symbol=symbol)
-        if df is None or df.empty: return "Error: Contract invalid."
+        if df is None or df.empty:
+            return "Error: Contract invalid or expired."
 
-        df['date'] = pd.to_datetime(df['date']).dt.strftime('%Y%m%d')
-        df = df[(df['date'] >= start) & (df['date'] <= end)].copy()
+        df['date'] = pd.to_datetime(df['date'])
+        start_dt = pd.to_datetime(start, format='%Y%m%d')
+        end_dt = pd.to_datetime(end, format='%Y%m%d')
+        df = df[(df['date'] >= start_dt) & (df['date'] <= end_dt)]
 
-        if df.empty: return "Error: No data in period."
         return process_df(df, limit)
     except Exception as e:
-        return f"Error: {str(e)}. Use correct symbol."
+        return f"Error: {str(e)}. Check symbol validity using get_futures_list."
+
+
+@mcp.tool()
+def get_futures_list(symbol: str) -> str:
+    """
+    获取 指数期货 实时行情，可以用于查找正确的合约代码。
+    symbol: 指数期货的中文名称，取值范围 {"沪深300指数期货", "上证50指数期货", "中证500指数期货", "中证1000股指期货"}
+    """
+    try:
+        df = ak.futures_zh_realtime(symbol)
+        if df is None or df.empty:
+            return "Error: List unavailable."
+        df = df.rename(columns={'name': 'Name',
+                                'symbol': 'Symbol',
+                                'trade': 'Price',
+                                'volume': 'Volume',
+                                'changepercent': 'Pct',
+                                'position': 'Position'})
+        df0 = df[['Name', 'Symbol', 'Price', 'Volume', 'Pct', 'Position']]
+        return df0.to_csv(index=False, float_format='%.2f')
+    except Exception as e:
+        return f"Error: {str(e)}"
 
 
 @mcp.tool()
 def get_sector_daily(symbol: str, period: str = "5d") -> str:
-    """获取 行业板块 历史行情。symbol: 标准中文名 (e.g. 半导体)"""
+    """获取 行业板块 历史行情。symbol: 行业板块的中文名称，如 半导体)"""
     start, end, limit = get_date_window(period)
     try:
-        df = ak.stock_board_industry_hist_em(symbol=symbol, start_date=start, end_date=end, adjust="qfq")
-        if df is None or df.empty: return f"Error: Sector '{symbol}' not found. Use get_sector_list to get the correct symbol."
+        df = ak.stock_board_industry_hist_em(
+            symbol=symbol,
+            start_date=start,
+            end_date=end,
+            adjust="qfq"
+        )
         return process_df(df, limit)
     except Exception as e:
-        return f"Error: {str(e)}. Use get_sector_list to get the correct symbol."
+        return f"Error: Sector '{symbol}' not found. Use get_sector_list to check names."
 
 
 @mcp.tool()
-def get_sector_list(top_n: int = 100) -> str:
-    """获取当前市场板块涨幅榜，用于查找标准名称。返回: Name, Close, Pct"""
+def get_sector_list(top_n: int = 10) -> str:
+    """
+    获取板块实时行情，按涨跌幅排序，取前 top_n 个板块。
+    当 top_n 取 50 以上时，返回全部板块列表，可以用于查找正确的板块名称。
+    """
     try:
         df = ak.stock_board_industry_name_em()
-        if df is None or df.empty: return "Error: List unavailable."
+        if df is None or df.empty:
+            return "Error: List unavailable."
+        df = df.rename(columns={'板块名称': 'Name',
+                                '板块代码': 'Symbol',
+                                '最新价': 'Price',
+                                '涨跌幅': 'Pct',})
+        df.sort_values(by='Pct', ascending=False, inplace=True)
+        df0 = df[['Name', 'Symbol', 'Price', 'Pct']]
+        return df0.head(top_n).to_csv(index=False, float_format='%.2f')
+    except Exception as e:
+        return f"Error: {str(e)}"
 
-        rename_map = {'板块名称': 'Name', '最新价': 'Close', '涨跌幅': 'Pct'}
-        df = df.rename(columns=rename_map)
 
-        # 补全缺失列以适配通用格式
-        for col in ['Open', 'High', 'Low', 'Volume']:
-            df[col] = 0.0
-        df['Date'] = datetime.now().strftime('%Y-%m-%d')
+@mcp.tool()
+def get_etf_daily(symbol: str, period: str = "5d") -> str:
+    """获取 ETF 基金 历史行情。symbol: 6位数字，如 510300"""
+    symbol = re.sub(r"\D", "", symbol)
+    start, end, limit = get_date_window(period)
+    try:
+        df = ak.fund_etf_hist_em(
+            symbol=symbol,
+            period = "daily",
+            start_date = start,
+            end_date = end,
+            adjust = "qfq"
+        )
+        return process_df(df, limit)
+    except Exception as e:
+        return f"Error: ETF '{symbol}' not found. Use get_etf_list to check names."
 
-        df = df.sort_values(by='Pct', ascending=False)
-        return df[['Name', 'Close', 'Pct', 'Volume']].head(top_n).to_csv(index=False, float_format='%.2f')
+
+@mcp.tool()
+def get_etf_list(top_n: int = 50) -> str:
+    """
+    获取 ETF 实时行情，按涨跌幅排序，取前 top_n 支 ETF。
+    当 top_n 取 1100 以上时，返回全部 ETF 列表，可以用于查找正确的 ETF 代码。
+    """
+    try:
+        df = ak.fund_etf_spot_em()
+        if df is None or df.empty:
+            return "Error: List unavailable."
+        df = df.rename(columns={'名称': 'Name',
+                                '代码': 'Symbol',
+                                '最新价': 'Price',
+                                '成交量': 'Volume',
+                                '涨跌幅': 'Pct',
+                                'IOPV实时估值': 'IOPV',
+                                '基金折价率': 'DiscountRate'})
+        df.sort_values(by='Pct', ascending=False, inplace=True)
+        df0 = df[['Name', 'Symbol', 'Price', 'Pct']]
+        return df0.head(top_n).to_csv(index=False, float_format='%.2f')
     except Exception as e:
         return f"Error: {str(e)}"
 
@@ -163,4 +313,5 @@ def get_sector_list(top_n: int = 100) -> str:
 if __name__ == "__main__":
     mcp.run()
 
-# npx @modelcontextprotocol/inspector "D:\Anaconda\envs\UBS\python.exe" mcp_server_marketdata.py
+# 测试命令
+# npx @modelcontextprotocol/inspector D:/Anaconda/envs/UBS/python.exe mcp_server_marketdata.py

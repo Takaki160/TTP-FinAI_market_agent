@@ -1,128 +1,117 @@
 import asyncio
 import os
 import sys
-import logging
 import warnings
+from datetime import datetime
 from contextlib import AsyncExitStack
-from typing import Any, Type, List, Dict, Union
+from typing import List, Dict, Union, Any
 
-# 屏蔽特定警告
-warnings.filterwarnings("ignore", message=".*create_react_agent.*")
-warnings.filterwarnings("ignore", category=UserWarning, module="langgraph")
-warnings.filterwarnings("ignore", category=DeprecationWarning)
+# 忽略非关键警告
+warnings.filterwarnings("ignore")
 
-from pydantic import create_model, Field, BaseModel
+# 必须的第三方库导入
+from pydantic import create_model, Field
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
-
 from langchain_core.tools import StructuredTool
 from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.prebuilt import create_react_agent
 from langgraph.checkpoint.memory import MemorySaver
 
-# --- 全局配置 ---
-# 请确保此处路径正确
+# --- 配置 ---
 PYTHON_PATH = os.getenv("MCP_PYTHON_PATH", sys.executable)
-
-SERVER_SCRIPTS = {
+SERVER_FILES = {
     "MarketData": "mcp_server_marketdata.py",
     "MarketNews": "mcp_server_marketnews.py"
 }
 
-# 基础日志配置 (只显示错误)
-logging.basicConfig(level=logging.ERROR)
-logging.getLogger("mcp").setLevel(logging.ERROR)
-logging.getLogger("httpx").setLevel(logging.ERROR)
 
-
-# --- 辅助功能 ---
+# --- 辅助函数 ---
 
 def safe_input(prompt: str) -> str:
-    """兼容各类控制台的输入函数"""
-    print(prompt, end="", flush=True)
-    return sys.stdin.readline().strip()
+    """处理控制台输入"""
+    try:
+        print(prompt, end="", flush=True)
+        return sys.stdin.readline().strip()
+    except UnicodeDecodeError:
+        return ""
 
 
-def extract_text_content(content: Union[str, List[Dict]]) -> str:
-    """清洗 AI 返回的内容，处理复杂列表结构"""
-    if isinstance(content, str):
-        return content
-
-    text_parts = []
+def extract_text(content: Union[str, List[Dict]]) -> str:
+    """提取消息文本内容"""
+    if isinstance(content, str): return content
+    text = []
     if isinstance(content, list):
         for block in content:
             if isinstance(block, dict) and block.get("type") == "text":
-                text_parts.append(block.get("text", ""))
+                text.append(block.get("text", ""))
             elif isinstance(block, str):
-                text_parts.append(block)
+                text.append(block)
+    return "".join(text)
 
-    return "".join(text_parts) if text_parts else str(content)
 
-
-def create_tool_schema(tool_name: str, input_schema: dict) -> Type[BaseModel]:
-    """将 MCP JSON Schema 转换为 Pydantic 模型"""
+def create_schema(name: str, schema: dict) -> Any:
+    """动态生成 Pydantic 参数模型"""
     fields = {}
-    properties = input_schema.get("properties", {})
-    required_fields = input_schema.get("required", [])
+    properties = schema.get("properties", {})
+    required = schema.get("required", [])
 
-    type_map = {
-        "integer": int,
-        "number": float,
-        "boolean": bool
-    }
+    type_map = {"integer": int, "number": float, "boolean": bool, "string": str}
 
-    for name, prop in properties.items():
-        py_type = type_map.get(prop.get("type"), str)
-        desc = prop.get("description", "")
+    if not properties:
+        return create_model(f"{name}Input")
 
-        field_info = Field(..., description=desc) if name in required_fields else Field(None, description=desc)
-        fields[name] = (py_type, field_info)
+    for prop_name, prop_def in properties.items():
+        py_type = type_map.get(prop_def.get("type"), str)
+        desc = prop_def.get("description", "")
 
-    return create_model(f"{tool_name}Input", **fields)
+        if prop_name in required:
+            fields[prop_name] = (py_type, Field(..., description=desc))
+        else:
+            fields[prop_name] = (py_type, Field(None, description=desc))
+
+    return create_model(f"{name}Input", **fields)
 
 
-# --- 核心逻辑 ---
+async def load_tools(session: ClientSession) -> List[StructuredTool]:
+    """MCP 工具转 LangChain 工具"""
+    mcp_tools = await session.list_tools()
+    lc_tools = []
 
-async def load_mcp_tools(session: ClientSession) -> List[StructuredTool]:
-    """从 MCP Session 加载并转换工具"""
-    mcp_tools_list = await session.list_tools()
-    langchain_tools = []
-
-    for tool in mcp_tools_list.tools:
-        async def _invoke(tool_name=tool.name, **kwargs):
-            result = await session.call_tool(tool_name, arguments=kwargs)
-            # 尝试提取文本内容
+    for tool in mcp_tools.tools:
+        async def _invoke(**kwargs):
+            # 获取闭包绑定的工具名
+            t_name = tool.name
+            result = await session.call_tool(t_name, arguments=kwargs)
             if result.content and hasattr(result.content[0], "text"):
                 return result.content[0].text
             return str(result.content)
 
-        lc_tool = StructuredTool.from_function(
+        # 绑定名称防止闭包问题
+        _invoke.__name__ = f"invoke_{tool.name}"
+
+        lc_tools.append(StructuredTool.from_function(
             func=None,
             coroutine=_invoke,
             name=tool.name,
             description=tool.description,
-            args_schema=create_tool_schema(tool.name, tool.inputSchema)
-        )
-        langchain_tools.append(lc_tool)
+            args_schema=create_schema(tool.name, tool.inputSchema)
+        ))
+    return lc_tools
 
-    return langchain_tools
 
+# --- 主程序 ---
 
 async def main():
-    # 0. 环境检查
-    if not os.path.exists(PYTHON_PATH):
-        print(f"❌ 错误: Python 解释器路径不存在: {PYTHON_PATH}")
-        return
-
-    # 1. API Key 配置
+    # 1. 检查 API Key
     if "GOOGLE_API_KEY" not in os.environ:
-        api_key = safe_input("请输入 Google API Key: ")
-        if not api_key:
-            return
-        os.environ["GOOGLE_API_KEY"] = api_key
+        key = safe_input("🔑 Google API Key: ")
+        if not key: return
+        os.environ["GOOGLE_API_KEY"] = key
 
-    print("🧠 初始化 Agent...")
+    # 2. 初始化模型 (使用 gemini-2.5-flash)
+    print("🧠 正在初始化 Gemini-2.5-flash...")
     try:
         llm = ChatGoogleGenerativeAI(
             model="gemini-2.5-flash",
@@ -130,99 +119,89 @@ async def main():
             convert_system_message_to_human=True
         )
     except Exception as e:
-        print(f"❌ 模型初始化失败: {e}")
+        print(f"❌ 模型错误: {e}")
         return
 
-    # 2. 连接 MCP Servers
+    # 3. 连接 MCP 服务
     async with AsyncExitStack() as stack:
-        all_tools = []
+        tools = []
+        print("🔌 连接 MCP Servers...")
 
-        print("🔌 连接工具服务...")
-        for name, script in SERVER_SCRIPTS.items():
-            full_path = os.path.abspath(script)
-            if not os.path.exists(full_path):
-                print(f"⚠️ 跳过: 文件未找到 {script}")
+        for name, script in SERVER_FILES.items():
+            if not os.path.exists(script):
+                print(f"⚠️ 文件未找到: {script}")
                 continue
 
             try:
-                # 启动子进程并建立连接
-                transport = await stack.enter_async_context(
-                    stdio_client(StdioServerParameters(
-                        command=PYTHON_PATH,
-                        args=[full_path],
-                        env=os.environ.copy()
-                    ))
-                )
+                # 关键：强制 UTF-8 环境，防止 Windows 乱码
+                env = os.environ.copy()
+                env["PYTHONIOENCODING"] = "utf-8"
+
+                transport = await stack.enter_async_context(stdio_client(
+                    StdioServerParameters(command=PYTHON_PATH, args=[script], env=env)
+                ))
                 session = await stack.enter_async_context(ClientSession(transport[0], transport[1]))
                 await session.initialize()
 
-                tools = await load_mcp_tools(session)
-                print(f"✅ {name}: 已加载 {len(tools)} 个工具")
-                all_tools.extend(tools)
+                server_tools = await load_tools(session)
+                tools.extend(server_tools)
+                print(f"✅ {name}: 加载 {len(server_tools)} 个工具")
             except Exception as e:
                 print(f"❌ {name} 连接失败: {e}")
 
-        if not all_tools:
-            print("🛑 无可用工具，程序退出")
+        if not tools:
+            print("🛑 无可用工具，退出。")
             return
 
-        # 3. 创建 Graph Agent
-        graph = create_react_agent(
-            model=llm,
-            tools=all_tools,
-            checkpointer=MemorySaver()
-        )
+        # 4. 构建 Agent (注入时间感知)
+        curr_time = datetime.now().strftime("%Y-%m-%d %A")
+        sys_prompt = f"你是一个金融助手。当前时间: {curr_time}。根据此时间处理'最近'或'过去x天'的日期计算。使用中文回答。"
 
-        print("-" * 50)
-        print("💡 助手就绪 (输入 'q' 退出)")
+        agent = create_react_agent(model=llm,
+                                   tools=tools,
+                                   prompt=sys_prompt,
+                                   checkpointer=MemorySaver())
+        config = {"configurable": {"thread_id": "main_thread"}}
 
-        config = {"configurable": {"thread_id": "session-01"}}
+        print(f"💡 系统就绪 ({curr_time}) | 输入 'q' 退出")
 
-        # 4. 对话循环
+        # 5. 对话循环
         while True:
             try:
-                user_msg = safe_input("\nUser: ")
-                if user_msg.lower() in ["q", "quit", "exit"]:
-                    break
-                if not user_msg:
-                    continue
+                query = safe_input("\nUser: ")
+                if query.lower() in ('q', 'exit', 'quit'): break
+                if not query: continue
 
                 print("Thinking...", flush=True)
 
-                async for event in graph.astream(
-                        input={"messages": [HumanMessage(content=user_msg)]},
-                        config=config,
+                async for event in agent.astream(
+                        {"messages": [HumanMessage(content=query)]},
+                        config,
                         stream_mode="updates"
                 ):
                     for _, updates in event.items():
                         if "messages" not in updates: continue
+                        msg = updates["messages"][-1]
 
-                        last_msg = updates["messages"][-1]
+                        if isinstance(msg, AIMessage):
+                            if msg.tool_calls:
+                                for tc in msg.tool_calls:
+                                    print(f"🔍 调用: {tc['name']} {tc['args']}")
+                            elif msg.content:
+                                print(f"\rAI: {extract_text(msg.content)}\n")
 
-                        # 处理工具调用显示
-                        if isinstance(last_msg, AIMessage) and last_msg.tool_calls:
-                            for tc in last_msg.tool_calls:
-                                print(f"🔍 [调用工具] {tc['name']}")
-
-                        # 处理 AI 回复 (关键修复：清洗文本)
-                        elif isinstance(last_msg, AIMessage) and last_msg.content:
-                            clean_content = extract_text_content(last_msg.content)
-                            if clean_content.strip():
-                                print(f"\rAI: {clean_content}\n")
-
-                        # 处理工具返回显示
-                        elif isinstance(last_msg, ToolMessage):
-                            # 仅显示前100个字符避免刷屏
-                            preview = extract_text_content(last_msg.content).replace("\n", " ")[:100]
-                            print(f"⚙️ [数据返回] {preview}...")
+                        elif isinstance(msg, ToolMessage):
+                            content = extract_text(msg.content).replace("\n", " ")[:60]
+                            print(f"⚙️ 数据: {content}...")
 
             except KeyboardInterrupt:
                 break
             except Exception as e:
-                print(f"\n❌ 发生错误: {e}")
+                print(f"❌ 运行错误: {e}")
 
 
 if __name__ == "__main__":
+    # Windows 异步事件循环策略修复
     if sys.platform.startswith("win"):
         asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
     asyncio.run(main())
