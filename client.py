@@ -80,10 +80,9 @@ async def load_tools(session: ClientSession) -> List[StructuredTool]:
     lc_tools = []
 
     for tool in mcp_tools.tools:
-        async def _invoke(**kwargs):
+        async def _invoke(tool_name=tool.name, **kwargs):
             # 获取闭包绑定的工具名
-            t_name = tool.name
-            result = await session.call_tool(t_name, arguments=kwargs)
+            result = await session.call_tool(tool_name, arguments=kwargs)
             if result.content and hasattr(result.content[0], "text"):
                 return result.content[0].text
             return str(result.content)
