@@ -6,7 +6,7 @@ import pandas as pd
 import akshare as ak
 from mcp.server.fastmcp import FastMCP
 
-# --- 环境适配：强制标准输出为 UTF-8 (解决 Windows 控制台乱码问题) ---
+# --- 环境适配：强制标准输出为 UTF-8 ---
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 
 # --- LLM 系统指令 ---
