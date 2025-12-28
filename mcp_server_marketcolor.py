@@ -1,138 +1,289 @@
 import sys
 import io
+import math
 import logging
+from datetime import datetime, timezone, timedelta
+import numpy as np
+import pandas as pd
 from mcp.server.fastmcp import FastMCP
 
-# --- 初始化配置 ---
-# 强制 UTF-8 编码，防止中文在部分环境乱码
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
-sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
-
-# 配置日志输出到 stderr，严禁污染 stdout (MCP 通信通道)
+# --- 配置日志 ---
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s | %(levelname)s | %(message)s',
+    format='%(asctime)s - %(levelname)s - %(message)s',
     stream=sys.stderr
 )
 logger = logging.getLogger("MarketColor")
 
+# --- 强制 UTF-8 输出 (解决 Windows 下乱码问题) ---
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+
+# --- 尝试导入 MarketData ---
+try:
+    import mcp_server_marketdata as data_source
+
+    logger.info("Successfully imported mcp_server_marketdata")
+except ImportError:
+    logger.warning("Could not import mcp_server_marketdata. Realtime features will be disabled.")
+    data_source = None
+except Exception as e:
+    logger.error(f"Error importing data source: {e}")
+    data_source = None
+
+# --- MCP 实例 ---
 mcp = FastMCP(
     name="MarketColor",
-    instructions="金融市场情绪量化计算引擎。仅用于执行数学模型计算，不产生主观建议。"
+    instructions="金融情绪量化引擎。基于统计概率分布与信号一致性计算，无经验参数。"
 )
 
 
-# --- 辅助函数 ---
-
-def _clip(val: float, low: float, high: float) -> float:
-    return max(low, min(val, high))
-
-
-# --- 工具定义 ---
-
-@mcp.tool()
-def calculate_sentiment_score(
-        macro_score: float,
-        macro_weight: float,
-        sector_score: float,
-        sector_weight: float
-) -> dict:
+# --- 1. 基础工具 ---
+def _stat_normalize(z_score: float) -> float:
     """
-    计算加权市场情绪分数。
-
-    Args:
-        macro_score: 宏观维度得分 [-1.0, 1.0]
-        macro_weight: 宏观权重 [0.0, 1.0]
-        sector_score: 行业维度得分 [-1.0, 1.0]
-        sector_weight: 行业权重 [0.0, 1.0]
+    统计学归一化。
+    使用高斯误差函数 (Error Function) 将 Z-Score 映射到概率区间 (-1, 1)。
+    Z=1.0 -> 0.68 (1σ概率), Z=2.0 -> 0.95 (2σ概率)。
+    替代了原有的 _tanh_norm 和 magic numbers。
     """
-    # 输入防御处理
-    m_score = _clip(macro_score, -1.0, 1.0)
-    s_score = _clip(sector_score, -1.0, 1.0)
-    m_weight = max(0.0, macro_weight)
-    s_weight = max(0.0, sector_weight)
+    return math.erf(z_score / math.sqrt(2))
 
-    total_weight = m_weight + s_weight
-    if total_weight <= 0:
-        return {"error": "Total weight must be positive", "status": "failed"}
 
-    # 加权计算
-    w_macro = m_weight / total_weight
-    w_sector = s_weight / total_weight
-    final_score = (m_score * w_macro) + (s_score * w_sector)
+def _calculate_z_score(val: float, history: pd.Series) -> float:
+    """
+    计算标准分 Z = (x - μ) / σ
+    """
+    if history.empty:
+        return 0.0
+    # 使用 ddof=1 计算样本标准差 (无偏估计)
+    std_dev = history.std(ddof=1)
+    if pd.isna(std_dev) or std_dev == 0:
+        return 0.0
+    return (val - history.mean()) / std_dev
 
-    # 情绪定性
-    if final_score >= 0.6:
-        mood = "Greed (极度乐观)"
-    elif final_score >= 0.2:
-        mood = "Optimism (乐观)"
-    elif final_score <= -0.6:
-        mood = "Fear (极度恐慌)"
-    elif final_score <= -0.2:
-        mood = "Pessimism (悲观)"
+
+# --- 2. 实时数据获取 ---
+def _get_realtime_snapshot(symbol: str, asset_type: str) -> dict:
+    """
+    从 MarketData 的 List 接口中查找实时数据。
+    """
+    if not data_source:
+        return None
+
+    try:
+        df_list = pd.DataFrame()
+
+        # A. 行业板块
+        if asset_type == "sector":
+            df_list = data_source._fetch_sector_list(top_n=100)
+            if not df_list.empty:
+                matches = df_list[(df_list['Name'] == symbol) | (df_list['Symbol'] == symbol)]
+                if not matches.empty:
+                    rec = matches.iloc[0]
+                    return {
+                        "Price": float(rec['Price']),
+                        "Pct": float(rec['Pct'])
+                    }
+
+        # B. 指数
+        elif asset_type == "index":
+            df_list = data_source._fetch_index_list(symbol="沪深重要指数")
+            clean_symbol = symbol.lower().replace("sh", "").replace("sz", "").replace("bj", "").replace("csi", "")
+
+            if not df_list.empty:
+                matches = df_list[(df_list['Symbol'] == clean_symbol) | (df_list['Name'] == symbol)]
+                if not matches.empty:
+                    rec = matches.iloc[0]
+                    return {
+                        "Price": float(rec['Price']),
+                        "Pct": float(rec['Pct'])
+                    }
+
+    except Exception as e:
+        logger.error(f"Snapshot fetch error for {symbol}: {e}")
+        return None
+
+    return None
+
+
+# --- 3. 核心分析逻辑 ---
+
+def _internal_analyze(df_hist: pd.DataFrame, snapshot: dict, news_score: float) -> dict:
+    """
+    核心计算：基于统计分布的无参数融合算法。
+    """
+    # 统计学样本要求，建议至少 20 天
+    if df_hist.empty or len(df_hist) < 20:
+        return {"error": "History data insufficient (Need >20 days)"}
+
+    # --- 1. 数据准备 (Data Preparation) ---
+
+    # 历史切片：使用全部传入的历史数据来计算更稳定的分布
+    # 计算对数收益率 (Log Returns)，使其更符合正态分布假设
+    with np.errstate(divide='ignore', invalid='ignore'):
+        hist_log_ret = np.log(df_hist['Close'] / df_hist['Close'].shift(1)).dropna()
+
+    prev_close = df_hist['Close'].iloc[-1]
+
+    # 初始化变量
+    curr_price = prev_close
+    real_pct = 0.0
+    curr_log_ret = 0.0
+
+    # 获取当前数据并计算收益率
+    if snapshot:
+        curr_price = snapshot['Price']
+
+        # 【关键修改】直接优先读取 Snapshot 中的 Pct
+        if 'Pct' in snapshot:
+            real_pct = snapshot['Pct']
+            # 反推对数收益率用于后续的 Z-Score 计算，保证统计有效性
+            # Log Return = ln(1 + Pct/100)
+            curr_log_ret = math.log(1 + real_pct / 100.0)
+        else:
+            # 备用逻辑：如果没有 Pct 字段（极少情况）
+            if prev_close > 0:
+                real_pct = (curr_price - prev_close) / prev_close * 100
+                curr_log_ret = np.log(curr_price / prev_close)
     else:
-        mood = "Neutral (中性)"
+        # 无快照模式（回退到0）
+        curr_log_ret = 0.0
+        real_pct = 0.0
 
-    # 记录日志 (stderr)
-    logger.info(f"[Sentiment] Score: {final_score:.4f} | Mood: {mood}")
+    # 20日均线 (仅用于趋势描述，不影响打分)
+    ma20 = df_hist['Close'].iloc[-20:].mean()
+
+    # --- 2. 统计计算 (Statistical Calculation) ---
+
+    # A. 计算价格 Z-Score (标准化偏离度)
+    # 此时 curr_log_ret 已经包含了基于 Pct 的正确波动信息
+    price_z = _calculate_z_score(curr_log_ret, hist_log_ret)
+
+    # B. 技术面评分归一化 (Tech Score)
+    # 使用误差函数映射到概率空间 (-1 ~ 1)，无人工阈值
+    tech_score = _stat_normalize(price_z)
+
+    # --- 3. 自适应权重融合 (Adaptive Fusion) ---
+
+    # 逻辑：信号显著性 (Signal Magnitude) 决定权重。
+    # 谁的绝对值大（信号更明确），就听谁的。
+    sig_news = abs(news_score)
+    sig_tech = abs(tech_score)
+
+    epsilon = 1e-6  # 防止除零
+    total_sig = sig_news + sig_tech + epsilon
+
+    w_news = sig_news / total_sig
+    w_tech = sig_tech / total_sig
+
+    # 计算最终得分 (加权平均)
+    final_score = (news_score * w_news) + (tech_score * w_tech)
+
+    # --- 4. 几何置信度计算 (Geometric Confidence) ---
+
+    # 逻辑：计算两个分数在线性空间中的距离一致性
+    # 最大距离为 2 (1 - (-1))
+    distance = abs(news_score - tech_score)
+    normalized_dist = distance / 2.0
+
+    # 置信度 = 1 - 归一化距离
+    # 完全一致=1.0, 完全背离=0.0 (钳位到 0.1)
+    confidence = max(0.1, 1.0 - normalized_dist)
+
+    # --- 5. 输出格式化 ---
+
+    # 使用标准差概率作为标签阈值 (不再使用经验值 0.6, 0.2)
+    # 1 Sigma (68%) -> 0.68
+    # 0.5 Sigma (38%) -> 0.38
+
+    if final_score > 0.68:
+        mood = "极度乐观"
+    elif final_score > 0.38:
+        mood = "乐观"
+    elif final_score < -0.68:
+        mood = "极度恐慌"
+    elif final_score < -0.38:
+        mood = "悲观"
+    else:
+        mood = "中性"
+
+    if confidence > 0.8:
+        conf_label = "高"
+    elif confidence > 0.5:
+        conf_label = "中"
+    else:
+        conf_label = "低"
+
+    trend_desc = "📉" if curr_price < ma20 else "📈"
+
+    # 资产表现字符串
+    asset_str = f"现价: {curr_price:.2f} {trend_desc}<br>涨跌: {real_pct:+.2f}% (Z:{price_z:.2f})"
 
     return {
-        "score": round(final_score, 4),
-        "mood": mood,
-        "details": f"Macro({m_score}*{w_macro:.2f}) + Sector({s_score}*{w_sector:.2f})"
+        "sentiment_score": round(final_score, 2),
+        "sentiment_label": mood,
+        "confidence_score": round(confidence, 2),
+        "confidence_label": conf_label,
+        "asset_performance": asset_str,
+        # 记录逻辑轨迹用于调试：显示概率分和动态权重
+        "logic_trace": f"Tech(Prob):{tech_score:.2f} Weights(N/T):{w_news:.2f}/{w_tech:.2f}"
     }
 
 
+# --- 4. 对外工具 ---
+
 @mcp.tool()
-def calculate_confidence_level(
-        news_sentiment_dir: int,
-        market_price_dir: int,
-        is_high_volume: bool,
-        source_consensus: bool
+def analyze_asset_sentiment(
+        symbol: str,
+        asset_type: str,
+        news_score: float
 ) -> dict:
     """
-    基于量价验证逻辑计算信号置信度 (0.0 - 1.0)。
-
+    全自动量化市场情绪分析工具 (Statistical Model)。
     Args:
-        news_sentiment_dir: 新闻方向 (1:利好, -1:利空, 0:中性)
-        market_price_dir: 价格方向 (1:涨, -1:跌, 0:震荡)
-        is_high_volume: 是否放量
-        source_consensus: 多源是否一致
+        symbol: 指数代码或标准行业名称 (如 "sh000001", "半导体")，可以通过 MarketData 获取
+        asset_type: "index" | "sector"
+        news_score: 新闻情绪分 (-1.0 ~ 1.0)
     """
-    confidence = 0.5
-    factors = []
+    logger.info(f"Analyzing {asset_type}: {symbol}")
 
-    # 1. 来源一致性
-    if source_consensus:
-        confidence += 0.2
-        factors.append("Consensus(+0.2)")
+    if not data_source:
+        return {"error": "MarketData module missing"}
 
-    # 2. 价格印证 (背离扣分重于一致加分)
-    if news_sentiment_dir != 0:
-        if news_sentiment_dir == market_price_dir:
-            confidence += 0.2
-            factors.append("Price_Match(+0.2)")
-        elif market_price_dir != 0 and news_sentiment_dir != market_price_dir:
-            confidence -= 0.3
-            factors.append("Price_Divergence(-0.3)")
+    if asset_type not in ["index", "sector"]:
+        return {"error": "Only 'index' and 'sector' are supported."}
 
-    # 3. 量能确认
-    if is_high_volume:
-        confidence += 0.1
-        factors.append("High_Vol(+0.1)")
-    else:
-        confidence -= 0.1
-        factors.append("Low_Vol(-0.1)")
+    try:
+        f_news_score = float(news_score)
 
-    final_conf = _clip(confidence, 0.0, 1.0)
+        # Step 1: 获取历史数据 (稍微增加天数以获得更好的统计分布)
+        if asset_type == "index":
+            func_hist = data_source._fetch_index_daily
+        else:
+            func_hist = data_source._fetch_sector_daily
 
-    logger.info(f"[Confidence] Level: {final_conf:.2f} | Factors: {factors}")
+        df_hist = func_hist(symbol, period="30d")  # 改为30天保证统计稳健性
 
-    return {
-        "confidence": round(final_conf, 2),
-        "logic_trace": " | ".join(factors)
-    }
+        if isinstance(df_hist, str) or not isinstance(df_hist, pd.DataFrame):
+            return {"error": f"Invalid history data: {df_hist}"}
+
+        # Step 2: 获取实时快照
+        snapshot = _get_realtime_snapshot(symbol, asset_type)
+
+        # Step 3: 融合计算
+        result = _internal_analyze(df_hist, snapshot, f_news_score)
+
+        if "error" not in result:
+            result["symbol"] = symbol
+
+        return result
+
+    except Exception as e:
+        logger.error(f"Analysis tool error: {e}", exc_info=True)
+        return {"error": f"Analysis failed: {str(e)}"}
 
 
 if __name__ == "__main__":
     mcp.run()
+
+# 测试命令
+# npx @modelcontextprotocol/inspector "D:/Anaconda/envs/UBS/python.exe" mcp_server_marketcolor.py

@@ -47,7 +47,7 @@
 
 * **目标:** 落地 **场景 A (Market Color)**。将定性的新闻转化为**可度量的指标** (情绪分数、置信度)。
 * **User Visibility:**
-  * **User:** “给我今天的市场情绪摘要 (Market Color Summary)。”
+  * **User:** “给我今天的市场情绪摘要。”
   * **Agent:**
     * “**宏观:** 新闻总结 xxx (Sentiment Score: xx, Confidence Level: xx)”
     * “**板块:** 新闻总结 xxx (Sentiment Score: xx, Confidence Level: xx)”
@@ -58,9 +58,9 @@
 * **User Visibility:**
   * **User:** “根据市场情绪，给我今天的因子观察清单 (Factor Watchlist) ”
   * **Agent:**
-    * “**动量因子 (Momentum):** 风险: xxx, 预期: 收益 xx, 夏普率 xx, ...”
-    * “**市值因子 (Size):** 风险: xxx, 预期: 收益 xx, 夏普率：xx, ...”
-    * “**波动率因子 (Volatility):** 风险: xxx, 预期: 收益 xx, 夏普率 xx, ...”
+    * “**动量因子 (Momentum):** 风险: xxx, 预期: 因子收益 xx”
+    * “**市值因子 (Size):** 风险: xxx, 预期: 因子收益 xx”
+    * “**波动率因子 (Volatility):** 风险: xxx, 预期: 因子收益 xx”
 
 ### Phase 4: Final Polish & Dashboard (Dec 30)
 

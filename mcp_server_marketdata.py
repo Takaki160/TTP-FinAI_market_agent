@@ -1,7 +1,7 @@
 import sys
 import io
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import pandas as pd
 import akshare as ak
 from mcp.server.fastmcp import FastMCP
@@ -41,14 +41,14 @@ def get_date_window(period: str) -> tuple[str, str, int]:
 
     # 放大回溯天数以覆盖非交易日
     lookback = int(limit * 2.0) + 15
-    end_dt = datetime.now()
+    end_dt = datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=8)))
     start_dt = end_dt - timedelta(days=lookback)
 
     return start_dt.strftime("%Y%m%d"), end_dt.strftime("%Y%m%d"), limit
 
 
-def process_df(df: pd.DataFrame, limit: int) -> str:
-    """通用数据清洗、排序与格式化"""
+def process_csv(df: pd.DataFrame, limit: int) -> str:
+    """通用数据清洗、排序与格式化 csv"""
     if df.empty:
         return "Info: No data found."
 
@@ -99,7 +99,60 @@ def process_df(df: pd.DataFrame, limit: int) -> str:
         return final_df.head(limit).to_csv(index=False, float_format='%.2f')
 
 
+def process_df(df: pd.DataFrame, limit: int) -> pd.DataFrame:
+    """通用数据清洗、排序与格式化 dataframe"""
+    if df.empty:
+        return "Info: No data found."
+
+    df = df.copy()
+
+    # 1. 统一列名映射
+    col_map = {
+        '日期': 'Date', 'date': 'Date',
+        '开盘': 'Open', 'open': 'Open',
+        '收盘': 'Close', 'close': 'Close', '最新价': 'Close',
+        '最高': 'High', 'high': 'High',
+        '最低': 'Low', 'low': 'Low',
+        '成交量': 'Volume', 'volume': 'Volume',
+        '涨跌幅': 'Pct', 'pct_chg': 'Pct', '涨跌幅(%)': 'Pct'
+    }
+    df = df.rename(columns=col_map)
+
+    # 2. 确保日期格式统一并排序
+    if 'Date' in df.columns:
+        try:
+            df['Date'] = pd.to_datetime(df['Date'])
+            df = df.sort_values(by='Date', ascending=True)
+            df['Date'] = df['Date'].dt.strftime('%Y-%m-%d')
+        except Exception:
+            pass
+
+    # 3. 数值转换
+    num_cols = ['Open', 'Close', 'High', 'Low', 'Volume', 'Pct']
+    for c in num_cols:
+        if c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors='coerce')
+
+    # 4. 补全 Pct 列
+    if 'Pct' not in df.columns and 'Close' in df.columns:
+        df['Pct'] = df['Close'].pct_change() * 100
+        df['Pct'] = df['Pct'].fillna(0.0)
+
+    # 5. 筛选与截取
+    target_cols = ['Date', 'Open', 'Close', 'High', 'Low', 'Volume', 'Pct']
+    valid_cols = [c for c in target_cols if c in df.columns]
+
+    final_df = df[valid_cols]
+
+    # 有日期则取最后 N 条(最新)，无日期(榜单)取前 N 条
+    if 'Date' in final_df.columns:
+        return final_df.tail(limit)
+    else:
+        return final_df.head(limit)
+
+
 # --- 工具定义 ---
+# 返回 CSV 版本，供 LLM 调用使用
 
 @mcp.tool()
 def get_stock_daily(symbol: str, period: str = "5d") -> str:
@@ -118,7 +171,7 @@ def get_stock_daily(symbol: str, period: str = "5d") -> str:
             end_date=end,
             adjust="qfq"
         )
-        return process_df(df, limit)
+        return process_csv(df, limit)
     except Exception as e:
         return f"Error: {str(e)}. Check symbol validity using get_stock_list."
 
@@ -166,7 +219,7 @@ def get_index_daily(symbol: str, period: str = "5d") -> str:
         end_dt = pd.to_datetime(end, format='%Y%m%d')
         df = df[(df['date'] >= start_dt) & (df['date'] <= end_dt)]
 
-        return process_df(df, limit)
+        return process_csv(df, limit)
     except Exception as e:
         return f"Error: {str(e)}. Check symbol validity using get_index_list."
 
@@ -212,7 +265,7 @@ def get_futures_daily(symbol: str, period: str = "5d") -> str:
         end_dt = pd.to_datetime(end, format='%Y%m%d')
         df = df[(df['date'] >= start_dt) & (df['date'] <= end_dt)]
 
-        return process_df(df, limit)
+        return process_csv(df, limit)
     except Exception as e:
         return f"Error: {str(e)}. Check symbol validity using get_futures_list."
 
@@ -252,9 +305,10 @@ def get_sector_daily(symbol: str, period: str = "5d") -> str:
             symbol=symbol,
             start_date=start,
             end_date=end,
+            period="日k",
             adjust="qfq"
         )
-        return process_df(df, limit)
+        return process_csv(df, limit)
     except Exception as e:
         return f"Error: Sector '{symbol}' not found. Use get_sector_list to check names."
 
@@ -263,7 +317,7 @@ def get_sector_daily(symbol: str, period: str = "5d") -> str:
 def get_sector_list(top_n: int = 10) -> str:
     """
     获取板块实时行情，按涨跌幅排序，取前 top_n 个板块。
-    当 top_n 取 50 以上时，返回全部板块列表，可以用于查找正确的板块名称。
+    当 top_n 取 100 以上时，返回全部板块列表，可以用于查找正确的板块名称。
     """
     try:
         df = ak.stock_board_industry_name_em()
@@ -296,7 +350,7 @@ def get_etf_daily(symbol: str, period: str = "5d") -> str:
             end_date = end,
             adjust = "qfq"
         )
-        return process_df(df, limit)
+        return process_csv(df, limit)
     except Exception as e:
         return f"Error: ETF '{symbol}' not found. Use get_etf_list to check names."
 
@@ -319,7 +373,7 @@ def get_etf_list(top_n: int = 50) -> str:
                                 'IOPV实时估值': 'IOPV',
                                 '基金折价率': 'DiscountRate'})
         df.sort_values(by='Pct', ascending=False, inplace=True)
-        df0 = df[['Name', 'Symbol', 'Price', 'Pct']]
+        df0 = df[['Name', 'Symbol', 'Price', 'Volume', 'Pct', 'IOPV', 'DiscountRate']]
         return df0.head(top_n).to_csv(index=False, float_format='%.2f')
     except Exception as e:
         return f"Error: {str(e)}"
@@ -328,5 +382,110 @@ def get_etf_list(top_n: int = 50) -> str:
 if __name__ == "__main__":
     mcp.run()
 
+
+# --- 内部函数 ---
+# 返回 DataFrame 版本，供内部调用使用
+
+def _fetch_index_daily(symbol: str, period: str = "5d") -> pd.DataFrame:
+    start, end, limit = get_date_window(period)
+    try:
+        df = ak.stock_zh_index_daily_em(symbol=symbol)
+        if df is None or df.empty:
+            return "Error: Symbol not found."
+
+        # 本地日期过滤 (接口返回全量数据)
+        df['date'] = pd.to_datetime(df['date'])
+        start_dt = pd.to_datetime(start, format='%Y%m%d')
+        end_dt = pd.to_datetime(end, format='%Y%m%d')
+        df = df[(df['date'] >= start_dt) & (df['date'] <= end_dt)]
+
+        return process_df(df, limit)
+    except Exception as e:
+        return f"Error: {str(e)}"
+
+
+def _fetch_index_list(symbol: str) -> pd.DataFrame:
+    try:
+        df = ak.stock_zh_index_spot_em(symbol=symbol)
+        if df is None or df.empty:
+            return "Error: List unavailable."
+        df.sort_values(by='涨跌幅', ascending=False, inplace=True)
+        df = df.rename(columns={'名称': 'Name',
+                                '代码': 'Symbol',
+                                '最新价': 'Price',
+                                '成交量': 'Volume',
+                                '涨跌幅': 'Pct'})
+        df0 = df[['Name', 'Symbol', 'Price', 'Volume', 'Pct']]
+        return df0
+    except Exception as e:
+        return f"Error: {str(e)}"
+
+
+def _fetch_sector_daily(symbol: str, period: str = "5d") -> pd.DataFrame:
+    start, end, limit = get_date_window(period)
+    try:
+        df = ak.stock_board_industry_hist_em(
+            symbol=symbol,
+            start_date=start,
+            end_date=end,
+            period="日k",
+            adjust="qfq"
+        )
+        return process_df(df, limit)
+    except Exception as e:
+        return f"Error: {str(e)}"
+
+
+def _fetch_sector_list(top_n: int = 60) -> pd.DataFrame:
+    try:
+        df = ak.stock_board_industry_name_em()
+        if df is None or df.empty:
+            return "Error: List unavailable."
+        df = df.rename(columns={'板块名称': 'Name',
+                                '板块代码': 'Symbol',
+                                '最新价': 'Price',
+                                '涨跌幅': 'Pct', })
+        df.sort_values(by='Pct', ascending=False, inplace=True)
+        df0 = df[['Name', 'Symbol', 'Price', 'Pct']]
+        return df0.head(top_n)
+    except Exception as e:
+        return f"Error: {str(e)}"
+
+
+def _fetch_etf_daily(symbol: str, period: str = "5d") -> pd.DataFrame:
+    symbol = re.sub(r"\D", "", symbol)
+    start, end, limit = get_date_window(period)
+    try:
+        df = ak.fund_etf_hist_em(
+            symbol=symbol,
+            period = "daily",
+            start_date = start,
+            end_date = end,
+            adjust = "qfq"
+        )
+        return process_df(df, limit)
+    except Exception as e:
+        return f"Error: {str(e)}"
+
+
+def _fetch_etf_list(top_n: int = 1100) -> pd.DataFrame:
+    try:
+        df = ak.fund_etf_spot_em()
+        if df is None or df.empty:
+            return "Error: List unavailable."
+        df = df.rename(columns={'名称': 'Name',
+                                '代码': 'Symbol',
+                                '最新价': 'Price',
+                                '成交量': 'Volume',
+                                '涨跌幅': 'Pct',
+                                'IOPV实时估值': 'IOPV',
+                                '基金折价率': 'DiscountRate'})
+        df.sort_values(by='Pct', ascending=False, inplace=True)
+        df0 = df[['Name', 'Symbol', 'Price', 'Volume', 'Pct', 'IOPV', 'DiscountRate']]
+        return df0.head(top_n)
+    except Exception as e:
+        return f"Error: {str(e)}"
+
+
 # 测试命令
-# npx @modelcontextprotocol/inspector D:/Anaconda/envs/UBS/python.exe mcp_server_marketdata.py
+# npx @modelcontextprotocol/inspector "D:/Anaconda/envs/UBS/python.exe" mcp_server_marketdata.py

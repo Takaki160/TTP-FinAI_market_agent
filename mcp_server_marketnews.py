@@ -157,5 +157,6 @@ def get_rolling_news_ths() -> str:
 if __name__ == "__main__":
     mcp.run()
 
+
 # 测试命令
-# npx @modelcontextprotocol/inspector D:/Anaconda/envs/UBS/python.exe mcp_server_marketdata.py
+# npx @modelcontextprotocol/inspector "D:/Anaconda/envs/UBS/python.exe" mcp_server_marketnews.py
