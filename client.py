@@ -208,7 +208,7 @@ async def main():
             * 针对每一个映射出的相关资产，调用 `MarketColor` 工具中的 `analyze_asset_sentiment`。
             * **参数严格要求**:
                 * `symbol`: 必须使用准确的指数代码或行业板块的中文名称 (如 "sh000001", "csi000905", "半导体", "酿酒行业")。
-                    * 注意：指数前缀取值范围 sz: 深交所, sh: 上交所, bj: 北交所, csi: 中证指数，请务必包含正确前缀。
+                    * **注意：**指数前缀取值范围 sz: 深交所, sh: 上交所, bj: 北交所, csi: 中证指数，请务必包含正确前缀。行业板块名称全部来自 MarketData 提供的实时行情数据，请仔细查找，严禁随意编造。
                 * `asset_type`: 必须严格为 `"index"` 或 `"sector"` 二选一。
                 * `news_score`: 填入你刚才打出的情感分 (Float类型)。
             * **输出**: 获取每个资产的"sentiment_score"、"sentiment_label"、"confidence_score"、"sentiment_label"、"asset_performance"、"logic_trace"。
