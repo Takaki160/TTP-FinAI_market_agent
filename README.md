@@ -43,7 +43,7 @@
   * **User:** “给我最近大盘走势以及重要财经新闻。”
   * **Agent:** 准确返回相关行情数据以及原始财经新闻列表。
 
-### Phase 2: Market Color & Measurable Indicators (Dec 25)
+### Phase 2: Market Color & Measurable Indicators (Dec 30)
 
 * **目标:** 落地 **场景 A (Market Color)**。将定性的新闻转化为**可度量的指标** (情绪分数、置信度)。
 * **User Visibility:**
@@ -52,7 +52,7 @@
     * “**宏观:** 新闻总结 xxx (Sentiment Score: xx, Confidence Level: xx)”
     * “**板块:** 新闻总结 xxx (Sentiment Score: xx, Confidence Level: xx)”
 
-### Phase 3: Factor "Watchlist" & Risk Logic (Dec 28)
+### Phase 3: Factor "Watchlist" & Risk Logic
 
 * **目标:** 落地 **场景 B (Factor Watchlist)**。重点在于将新闻事件映射到 **风险因子** (如动量、规模、波动率)。
 * **User Visibility:**
@@ -62,7 +62,7 @@
     * “**市值因子 (Size):** 风险: xxx, 预期: 因子收益 xx”
     * “**波动率因子 (Volatility):** 风险: xxx, 预期: 因子收益 xx”
 
-### Phase 4: Final Polish & Dashboard (Dec 30)
+### Phase 4: Final Polish & Dashboard
 
 * **目标:** 接入持仓数据，提供风险建议与相关指标的可视化展示。
 * **User Visibility:**

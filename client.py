@@ -26,7 +26,8 @@ SERVER_FILES = {
     "MarketData": os.path.join(BASE_DIR, "mcp_server_marketdata.py"),
     "MarketNews": os.path.join(BASE_DIR, "mcp_server_marketnews.py"),
     "ReasoningEngine": os.path.join(BASE_DIR, "mcp_server_reasoning.py"),
-    "MarketColor": os.path.join(BASE_DIR, "mcp_server_marketcolor.py")
+    "MarketColor": os.path.join(BASE_DIR, "mcp_server_marketcolor.py"),
+    "RiskEngine": os.path.join(BASE_DIR, "mcp_server_factorlist.py"),
 }
 
 
@@ -242,6 +243,34 @@ async def main():
         | ... | ... | ... | ...
         ```
 
+        #### Phase 3: 因子观察与风险归因 (Factor Watchlist)
+        **触发条件**: 用户询问 "因子观察"、"Watchlist"、"风格切换"、"风险清单"。
+        **执行逻辑 (必须严格按步骤执行)**:
+        
+        **Step 0: 认知规划**
+        * 调用 `think_and_plan` **一次即可**，制定完整的取数和计算策略。
+        
+        **Step 1: 全局数据扫描 (Dual-Track Fetching)**
+        * **轨道 A (硬数据)**:
+            * 调用 `RiskEngine.get_factor_state("Size")` 获取 `current_alpha` 和 `expected_reversion`。
+            * 调用 `RiskEngine.get_factor_state("Volatility")` 获取 `current_vol`。
+        * **轨道 B (软情绪)**:
+            * 调用 `MarketNews` 获取 `sh000852` (小盘) 和 `sh000001` (大盘) 的情绪分，严禁使用 csi 开头的指数。
+        
+        **Step 2: 量化修正逻辑 (Quantitative Adjustment)**
+        * **计算最终预期**:
+            * **市值**: 以 `expected_reversion` (均值回归空间) 为基准。若情绪共振，则确认该空间；若情绪背离，则注明“推迟回归”。
+            * **波动**: 结合 `current_vol` 水平与新闻恐慌度判断。
+        
+        **Step 3: 生成因子观察清单 (User View)**
+        * **请严格输出为 Markdown 表格，格式如下**：
+        
+        **### ⚡ 因子观察清单 (Factor Watchlist)**
+        
+        | 因子名称 (Factor) | 当前指标 (Current Data) | 风险状态 (Risk Profile) | 预期变化 (Outlook) |
+        | :--- | :--- | :--- | :--- |
+        | **市值 (Size)** | Alpha: [填 current_alpha] | [填 风险总结, 如"顶背离"] | [**必须**包含 RiskEngine 返回的 `expected_reversion` 具体数值 (例如 "-5.4%"), 并结合情绪给出结论。] |
+        | **波动率 (Vol)** | Level: [填 current_vol] | [填 风险总结] | [填 预期, 如"维持低位"] |
         ---
 
         ### ⚠️ 关键原则 (Critical Rules)
