@@ -273,7 +273,7 @@ async def main():
         | **波动率 (Vol)** | Level: [填 current_vol] | [填 风险总结] | [填 预期, 如"维持低位"] |
         ---
 
-        ### ⚠️ 关键原则 (Critical Rules)
+        ### 关键原则 (Critical Rules)
         * **遇到复杂分析，必须先调用 ReasoningEngine 强迫自己冷静思考。**
         * **遇到简单查询，不要废话，直接给数据。**
         1. **不要幻觉计算**: 遇到数学计算，必须使用 MCP Tool。
