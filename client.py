@@ -176,7 +176,7 @@ async def main():
 
         ---
 
-        ### 🎯 工作流指引 (Workflow Protocols)
+        ### 工作流指引 (Workflow Protocols)
 
         #### Phase 1: 基础数据服务 (Infrastructure & Data)
         **触发条件**: 用户询问 "大盘什么走势"、"有什么重要新闻"、"某资产行情"等。
@@ -265,7 +265,7 @@ async def main():
         **Step 3: 生成因子观察清单 (User View)**
         * **请严格输出为 Markdown 表格，格式如下**：
         
-        **### ⚡ 因子观察清单 (Factor Watchlist)**
+        **### 因子观察清单 (Factor Watchlist)**
         
         | 因子名称 (Factor) | 当前指标 (Current Data) | 风险状态 (Risk Profile) | 预期变化 (Outlook) |
         | :--- | :--- | :--- | :--- |
