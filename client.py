@@ -27,7 +27,6 @@ SERVER_FILES = {
     "MarketNews": os.path.join(BASE_DIR, "mcp_server_marketnews.py"),
     "ReasoningEngine": os.path.join(BASE_DIR, "mcp_server_reasoning.py"),
     "MarketColor": os.path.join(BASE_DIR, "mcp_server_marketcolor.py"),
-    "RiskEngine": os.path.join(BASE_DIR, "mcp_server_factorlist.py"),
 }
 
 
