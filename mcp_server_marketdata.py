@@ -488,4 +488,4 @@ def _fetch_etf_list(top_n: int = 1100) -> pd.DataFrame:
 
 
 # 测试命令
-# npx @modelcontextprotocol/inspector "D:/Anaconda/envs/UBS/python.exe" mcp_server_marketdata.py
+# npx @modelcontextprotocol/inspector "C:\Users\User\Programs\Anaconda\envs\UBS\python.exe" mcp_server_marketdata.py

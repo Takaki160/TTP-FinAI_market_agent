@@ -159,4 +159,4 @@ if __name__ == "__main__":
 
 
 # 测试命令
-# npx @modelcontextprotocol/inspector "D:/Anaconda/envs/UBS/python.exe" mcp_server_marketnews.py
+# npx @modelcontextprotocol/inspector "C:\Users\User\Programs\Anaconda\envs\UBS\python.exe" mcp_server_marketnews.py
