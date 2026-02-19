@@ -16,7 +16,7 @@ INSTRUCTIONS = """
 2. 财联社 (CLS) - 默认最新 20 条，无需指定参数
 3. 同花顺 (THS) - 默认最新 20 条，无需指定参数
 
-获取新闻时必须使用全部 3 个接口，不能遗漏，以确保信息全面。
+获取财经新闻时必须使用全部 3 个接口，严禁遗漏，以确保信息全面。
 所有接口均返回标准 CSV 格式字符串，包含列: Time, Title, Content。
 如果新闻没有标题，Title 列将由内容自动生成。
 """
@@ -25,7 +25,6 @@ mcp = FastMCP(name="MarketNews", instructions=INSTRUCTIONS)
 
 
 # --- 辅助函数 ---
-
 def clean_text(text) -> str:
     """清洗文本：去除 HTML、换行符及多余空格"""
     if pd.isna(text):
@@ -80,7 +79,6 @@ def process_df(df: pd.DataFrame, limit: int = 20) -> str:
 
 
 # --- 工具定义 ---
-
 @mcp.tool()
 def get_rolling_news_sina() -> str:
     """[新浪财经] 获取全球财经快讯 (最新 20 条)。"""
