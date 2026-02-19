@@ -11,20 +11,20 @@ sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 
 # --- LLM 系统指令 ---
 INSTRUCTIONS = """
-金融行情助手，提供 A 股个股、指数、指数期货、行业板块、ETF 基金的历史行情与实时行情数据。
+金融行情助手，提供 A 股个股、指数、指数期货、行业板块、ETF 基金的历史行情、实时行情数据。
 所有接口均返回 CSV 格式，历史行情均包含: Date, Open, Close, High, Low, Volume, Pct。
 
 历史行情调用规则：
 1. period (回溯时间): 格式如 "1d"(昨天)，"5d"(近5交易日)，"20d"(近1月)，默认 "5d"，严禁使用具体日期。
 2. symbol (资产代码):
-   - 个股: 6位数字，如 "600519"。
-   - 指数: 小写前缀+6位数字，如 "sh000001"。
-   - 指数期货: 大写品种+年月，如 "IF2406"。
-   - 行业板块: 标准中文名称，如 "半导体"。若不确定名称，必须调用 get_sector_list 查询。
-   - ETF 基金: 6位数字，如 "510300"。若不确定代码，必须调用 get_etf_list 查询。
+   - 个股: 6位数字代码，如 "600519"。
+   - 指数: 小写字母交易所前缀 + 6位数字代码，如 "sh000001"。
+   - 指数期货: 大写字母品种前缀 + 4位数字年月，如 "IF2406"。
+   - 行业板块: 标准中文名称，如 "半导体"。若不确定名称，必须调用 get_sector_list 查询，严禁自行编造名称。
+   - ETF 基金: 6位数字代码，如 "510300"。若不确定代码，必须调用 get_etf_list 查询，严禁自行编造代码。
 
 实时行情调用规则：
-1. 个股、ETF、行业板块: 返回前 top_n 条，按涨跌幅排序，当 top_n 取较大值时，返回全部列表，可用于查找正确代码或名称。
+1. 个股、行业板块、ETF 基金: 返回前 top_n 条，按涨跌幅排序，当 top_n 取较大值时，返回全部列表，可用于查找正确代码或名称。
 2. 指数、指数期货: 返回全部列表，可用于查找正确代码。
 """
 
@@ -32,7 +32,6 @@ mcp = FastMCP(name="MarketData", instructions=INSTRUCTIONS)
 
 
 # --- 辅助函数 ---
-
 def get_date_window(period: str) -> tuple[str, str, int]:
     """解析 period 获取时间窗口 (start, end, limit)"""
     # 提取数字，默认为 10
@@ -153,12 +152,11 @@ def process_df(df: pd.DataFrame, limit: int) -> pd.DataFrame:
 
 # --- 工具定义 ---
 # 返回 CSV 版本，供 LLM 调用使用
-
 @mcp.tool()
 def get_stock_daily(symbol: str, period: str = "5d") -> str:
     """
     获取 A股个股 历史行情。
-    symbol: 6位数字，如 600519
+    symbol: 6位数字代码，如 600519。
     period (回溯时间): 格式如 "1d"(昨天)，"5d"(近5交易日)，"20d"(近1月)，默认 "5d"，严禁使用具体日期。
     """
     symbol = re.sub(r"\D", "", symbol)
@@ -180,7 +178,7 @@ def get_stock_daily(symbol: str, period: str = "5d") -> str:
 def get_stock_list(top_n: int = 50) -> str:
     """
     获取 A股个股 实时行情，按涨跌幅排序，取前 top_n 支股票。
-    当 top_n 取 6000 以上时，返回全部股票列表，可以用于查找正确的股票代码。
+    注意：当 top_n 取 6000 以上时，返回全部股票列表，可以用于查找正确的股票代码。
     """
     try:
         df = ak.stock_zh_a_spot_em()
@@ -203,9 +201,9 @@ def get_stock_list(top_n: int = 50) -> str:
 def get_index_daily(symbol: str, period: str = "5d") -> str:
     """
     获取 A股指数 历史行情。
-    symbol: 小写前缀+6位数字，如 sh000001
+    symbol: 小写字母交易所前缀 + 6位数字代码，如 sh000001。
     period (回溯时间): 格式如 "1d"(昨天)，"5d"(近5交易日)，"20d"(近1月)，默认 "5d"，严禁使用具体日期。
-    前缀取值范围 {sz: 深交所, sh: 上交所, bj: 北交所, csi: 中证指数}
+    注意：symbol 交易所前缀取值范围仅限于 {"sz": "深交所", "sh": "上交所", "bj": "北交所", "csi": "中证指数"}
     """
     start, end, limit = get_date_window(period)
     try:
@@ -228,7 +226,8 @@ def get_index_daily(symbol: str, period: str = "5d") -> str:
 def get_index_list(symbol: str) -> str:
     """
     获取 A股指数 实时行情，按涨跌幅排序，可以用于查找正确的指数代码。
-    symbol: 指数类型的中文名称，取值范围仅限于 {"沪深重要指数", "上证系列指数", "深证系列指数", "指数成份", "中证系列指数"}
+    symbol: 指数类型的中文名称。
+    注意：symbol 取值范围仅限于 ["沪深重要指数", "上证系列指数", "深证系列指数", "指数成份", "中证系列指数"]
     """
     try:
         df = ak.stock_zh_index_spot_em(symbol=symbol)
@@ -250,7 +249,7 @@ def get_index_list(symbol: str) -> str:
 def get_futures_daily(symbol: str, period: str = "5d") -> str:
     """
     获取 指数期货 历史行情。
-    symbol: 大写品种+年月，如 IF2512
+    symbol: 大写字母品种 + 4位数字年月，如 IF2512。
     period (回溯时间): 格式如 "1d"(昨天)，"5d"(近5交易日)，"20d"(近1月)，默认 "5d"，严禁使用具体日期。
     """
     symbol = symbol.upper()
@@ -274,7 +273,8 @@ def get_futures_daily(symbol: str, period: str = "5d") -> str:
 def get_futures_list(symbol: str) -> str:
     """
     获取 指数期货 实时行情，可以用于查找正确的合约代码。
-    symbol: 指数期货的中文名称，取值范围仅限于 {"沪深300指数期货", "上证50指数期货", "中证500指数期货", "中证1000股指期货"}
+    symbol: 指数期货的中文名称。
+    注意：symbol 取值范围仅限于 ["沪深300指数期货", "上证50指数期货", "中证500指数期货", "中证1000股指期货"]
     """
     try:
         df = ak.futures_zh_realtime(symbol)
@@ -296,8 +296,8 @@ def get_futures_list(symbol: str) -> str:
 def get_sector_daily(symbol: str, period: str = "5d") -> str:
     """
     获取 行业板块 历史行情。
-    symbol: 行业板块的中文名称，如 半导体
-    period (回溯时间): 格式如 "1d"(昨天)，"5d(近5交易日)，"20d"(近1月)，默认 "5d"，严禁使用具体日期。
+    symbol: 行业板块的中文名称，如 半导体。
+    period (回溯时间): 格式如 "1d"(昨天)，"5d"(近5交易日)，"20d"(近1月)，默认 "5d"，严禁使用具体日期。
     """
     start, end, limit = get_date_window(period)
     try:
@@ -317,7 +317,7 @@ def get_sector_daily(symbol: str, period: str = "5d") -> str:
 def get_sector_list(top_n: int = 10) -> str:
     """
     获取板块实时行情，按涨跌幅排序，取前 top_n 个板块。
-    当 top_n 取 100 以上时，返回全部板块列表，可以用于查找正确的板块名称。
+    注意：当 top_n 取 100 以上时，返回全部板块列表，可以用于查找正确的板块名称。
     """
     try:
         df = ak.stock_board_industry_name_em()
@@ -337,7 +337,7 @@ def get_sector_list(top_n: int = 10) -> str:
 @mcp.tool()
 def get_etf_daily(symbol: str, period: str = "5d") -> str:
     """获取 ETF 基金 历史行情。
-    symbol: 6位数字，如 510300
+    symbol: 6位数字代码，如 510300。
     period (回溯时间): 格式如 "1d"(昨天)，"5d"(近5交易日)，"20d"(近1月)，默认 "5d"，严禁使用具体日期。
     """
     symbol = re.sub(r"\D", "", symbol)
@@ -359,7 +359,7 @@ def get_etf_daily(symbol: str, period: str = "5d") -> str:
 def get_etf_list(top_n: int = 50) -> str:
     """
     获取 ETF 实时行情，按涨跌幅排序，取前 top_n 支 ETF。
-    当 top_n 取 1100 以上时，返回全部 ETF 列表，可以用于查找正确的 ETF 代码。
+    注意：当 top_n 取 1100 以上时，返回全部 ETF 列表，可以用于查找正确的 ETF 代码。
     """
     try:
         df = ak.fund_etf_spot_em()
@@ -385,7 +385,6 @@ if __name__ == "__main__":
 
 # --- 内部函数 ---
 # 返回 DataFrame 版本，供内部调用使用
-
 def _fetch_index_daily(symbol: str, period: str = "5d") -> pd.DataFrame:
     start, end, limit = get_date_window(period)
     try:
