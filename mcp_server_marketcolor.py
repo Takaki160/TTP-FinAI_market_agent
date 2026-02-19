@@ -252,33 +252,55 @@ def analyze_asset_sentiment(
     if asset_type not in ["index", "sector"]:
         return {"error": "Only 'index' and 'sector' are supported."}
 
-    try:
-        f_news_score = float(news_score)
-
-        # Step 1: 获取历史数据 (稍微增加天数以获得更好的统计分布)
-        if asset_type == "index":
-            func_hist = data_source._fetch_index_daily
-        else:
-            func_hist = data_source._fetch_sector_daily
-
-        df_hist = func_hist(symbol, period="30d")  # 改为30天保证统计稳健性
-
-        if isinstance(df_hist, str) or not isinstance(df_hist, pd.DataFrame):
-            return {"error": f"Invalid history data: {df_hist}"}
-
-        # Step 2: 获取实时快照
-        snapshot = _get_realtime_snapshot(symbol, asset_type)
-
-        # Step 3: 融合计算
-        result = _internal_analyze(df_hist, snapshot, f_news_score)
-
-        if "error" not in result:
-            result["symbol"] = symbol
-
-        return result
-
-    except Exception as e:
-        logger.error(f"Analysis tool error: {e}", exc_info=True)
+            try:
+                f_news_score = float(news_score)
+    
+                # Step 1: 获取并清洗历史数据
+                if asset_type == "index":
+                    func_hist = data_source._fetch_index_daily
+                else:
+                    func_hist = data_source._fetch_sector_daily
+    
+                # 获取稍长周期的数据 (e.g., 40d) 以确保剔除当天数据和节假日后仍有足够样本
+                df_hist = func_hist(symbol, period="40d")
+    
+                if isinstance(df_hist, str) or not isinstance(df_hist, pd.DataFrame) or df_hist.empty:
+                    return {"error": f"Invalid or empty history data received: {df_hist}"}
+    
+                # --- 核心修正: 清洗历史数据，防止统计污染 ---
+                # 目标: 确保 df_hist 只包含到上一个交易日的数据
+                try:
+                    # 假设df_hist的索引是pandas.DatetimeIndex
+                    # 使用中国时区(UTC+8)获取“今天”的日期
+                    today = datetime.now(timezone(timedelta(hours=8))).date()
+                    
+                    # 检查最后一条数据的日期是否是今天
+                    if not df_hist.empty and df_hist.index[-1].date() == today:
+                        # 如果是今天，则移除最后一行
+                        logger.info(f"Removing today's incomplete data for {symbol} to ensure statistical integrity.")
+                        df_hist = df_hist.iloc[:-1]
+                except Exception as e:
+                    # 如果索引不是日期类型或发生其他错误, 记录一个警告但继续
+                    # 这种情况下模型结果的准确性可能会下降
+                    logger.warning(f"Could not clean history data for {symbol}. Technical score may be inaccurate. Reason: {e}")
+    
+                # 在清洗后再次检查数据是否充足
+                if len(df_hist) < 20:
+                    return {"error": f"History data insufficient after cleaning (requires > 20 days), found {len(df_hist)}."}
+    
+    
+                # Step 2: 获取实时快照
+                snapshot = _get_realtime_snapshot(symbol, asset_type)
+    
+                # Step 3: 融合计算
+                result = _internal_analyze(df_hist, snapshot, f_news_score)
+    
+                if "error" not in result:
+                    result["symbol"] = symbol
+    
+                return result
+    
+            except Exception as e:        logger.error(f"Analysis tool error: {e}", exc_info=True)
         return {"error": f"Analysis failed: {str(e)}"}
 
 
