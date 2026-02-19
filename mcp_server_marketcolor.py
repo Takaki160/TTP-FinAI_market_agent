@@ -15,7 +15,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger("MarketColor")
 
-# --- 强制 UTF-8 输出 (解决 Windows 下乱码问题) ---
+# --- 环境适配：强制标准输出为 UTF-8 ---
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 
 # --- 尝试导入 MarketData ---
@@ -30,11 +30,23 @@ except Exception as e:
     logger.error(f"Error importing data source: {e}")
     data_source = None
 
-# --- MCP 实例 ---
-mcp = FastMCP(
-    name="MarketColor",
-    instructions="金融情绪量化引擎。基于统计概率分布与信号一致性计算，无经验参数。"
-)
+# --- LLM 系统指令 ---
+INSTRUCTIONS = """
+金融情绪量化引擎。基于统计概率分布与信号一致性计算，无经验参数。
+输入:
+- symbol: 指数代码或标准行业名称 (如 "sh000001", "半导体")，可以通过 MarketData 获取
+- asset_type: "index" | "sector"
+- news_score: 新闻情绪分 (-1.0 ~ 1.0)
+输出:
+- sentiment_score: 综合情绪分 (-1.0 ~ 1.0)
+- sentiment_label: 情绪标签 (极度乐观, 乐观, 中性, 悲观, 极度恐慌)
+- confidence_score: 置信度分 (0.1 ~ 1.0)
+- confidence_label: 置信度标签 (高, 中, 低)
+- asset_performance: 资产表现字符串 (现价, 涨跌幅, 趋势)
+- logic_trace: 计算逻辑轨迹 (技术分, 权重)
+"""
+
+mcp = FastMCP(name="MarketColor", instructions=INSTRUCTIONS)
 
 
 # --- 1. 基础工具 ---
@@ -42,20 +54,18 @@ def _stat_normalize(z_score: float) -> float:
     """
     统计学归一化。
     使用高斯误差函数 (Error Function) 将 Z-Score 映射到概率区间 (-1, 1)。
-    Z=1.0 -> 0.68 (1σ概率), Z=2.0 -> 0.95 (2σ概率)。
-    替代了原有的 _tanh_norm 和 magic numbers。
+    Z=1.0 -> 0.68 (1 sigma 概率), Z=2.0 -> 0.95 (2 sigma 概率)。
     """
     return math.erf(z_score / math.sqrt(2))
 
 
 def _calculate_z_score(val: float, history: pd.Series) -> float:
     """
-    计算标准分 Z = (x - μ) / σ
+    计算标准分 Z-Score，表示当前值相对于历史分布的偏离程度。
     """
     if history.empty:
         return 0.0
-    # 使用 ddof=1 计算样本标准差 (无偏估计)
-    std_dev = history.std(ddof=1)
+    std_dev = history.std(ddof=1) # 使用 ddof=1 计算样本标准差 (无偏估计)
     if pd.isna(std_dev) or std_dev == 0:
         return 0.0
     return (val - history.mean()) / std_dev
@@ -106,17 +116,15 @@ def _get_realtime_snapshot(symbol: str, asset_type: str) -> dict:
 
 
 # --- 3. 核心分析逻辑 ---
-
 def _internal_analyze(df_hist: pd.DataFrame, snapshot: dict, news_score: float) -> dict:
     """
     核心计算：基于统计分布的无参数融合算法。
     """
-    # 统计学样本要求，建议至少 20 天
-    if df_hist.empty or len(df_hist) < 20:
-        return {"error": "History data insufficient (Need >20 days)"}
+    # 统计学样本要求至少 30 天
+    if df_hist.empty or len(df_hist) < 30:
+        return {"error": "History data insufficient (Need >30 days)"}
 
     # --- 1. 数据准备 (Data Preparation) ---
-
     # 历史切片：使用全部传入的历史数据来计算更稳定的分布
     # 计算对数收益率 (Log Returns)，使其更符合正态分布假设
     with np.errstate(divide='ignore', invalid='ignore'):
@@ -133,7 +141,7 @@ def _internal_analyze(df_hist: pd.DataFrame, snapshot: dict, news_score: float) 
     if snapshot:
         curr_price = snapshot['Price']
 
-        # 【关键修改】直接优先读取 Snapshot 中的 Pct
+        # 优先读取 Snapshot 中的 Pct
         if 'Pct' in snapshot:
             real_pct = snapshot['Pct']
             # 反推对数收益率用于后续的 Z-Score 计算，保证统计有效性
@@ -152,20 +160,17 @@ def _internal_analyze(df_hist: pd.DataFrame, snapshot: dict, news_score: float) 
     # 20日均线 (仅用于趋势描述，不影响打分)
     ma20 = df_hist['Close'].iloc[-20:].mean()
 
-    # --- 2. 统计计算 (Statistical Calculation) ---
-
+    # --- 2. 统计计算 ---
     # A. 计算价格 Z-Score (标准化偏离度)
     # 此时 curr_log_ret 已经包含了基于 Pct 的正确波动信息
     price_z = _calculate_z_score(curr_log_ret, hist_log_ret)
 
     # B. 技术面评分归一化 (Tech Score)
-    # 使用误差函数映射到概率空间 (-1 ~ 1)，无人工阈值
+    # 使用误差函数映射到概率空间 (-1 ~ 1)，更符合统计学意义
     tech_score = _stat_normalize(price_z)
 
-    # --- 3. 自适应权重融合 (Adaptive Fusion) ---
-
-    # 逻辑：信号显著性 (Signal Magnitude) 决定权重。
-    # 谁的绝对值大（信号更明确），就听谁的。
+    # --- 3. 自适应权重融合 ---
+    # 逻辑：信号显著性决定权重。
     sig_news = abs(news_score)
     sig_tech = abs(tech_score)
 
@@ -178,19 +183,16 @@ def _internal_analyze(df_hist: pd.DataFrame, snapshot: dict, news_score: float) 
     # 计算最终得分 (加权平均)
     final_score = (news_score * w_news) + (tech_score * w_tech)
 
-    # --- 4. 几何置信度计算 (Geometric Confidence) ---
-
-    # 逻辑：计算两个分数在线性空间中的距离一致性
-    # 最大距离为 2 (1 - (-1))
+    # --- 4. 置信度计算 ---
+    # 逻辑：计算两个分数在线性空间中的距离一致性，最大距离为 2 (1 - (-1))
     distance = abs(news_score - tech_score)
     normalized_dist = distance / 2.0
 
     # 置信度 = 1 - 归一化距离
-    # 完全一致=1.0, 完全背离=0.0 (钳位到 0.1)
+    # 完全一致=1.0, 完全背离=0.0 (但设置最低0.1以避免过度自信)
     confidence = max(0.1, 1.0 - normalized_dist)
 
     # --- 5. 输出格式化 ---
-
     # 使用标准差概率作为标签阈值
     # 1 Sigma (68%) -> 0.68
     # 0.5 Sigma (38%) -> 0.38
@@ -213,6 +215,7 @@ def _internal_analyze(df_hist: pd.DataFrame, snapshot: dict, news_score: float) 
     else:
         conf_label = "低"
 
+    # 趋势描述：基于当前价格与20日均线的关系
     trend_desc = "📉" if curr_price < ma20 else "📈"
 
     # 资产表现字符串
@@ -230,7 +233,6 @@ def _internal_analyze(df_hist: pd.DataFrame, snapshot: dict, news_score: float) 
 
 
 # --- 4. 对外工具 ---
-
 @mcp.tool()
 def analyze_asset_sentiment(
         symbol: str,
@@ -238,11 +240,11 @@ def analyze_asset_sentiment(
         news_score: float
 ) -> dict:
     """
-    全自动量化市场情绪分析工具 (Statistical Model)。
+    全自动量化市场情绪分析工具。
     Args:
-        symbol: 指数代码或标准行业名称 (如 "sh000001", "半导体")，可以通过 MarketData 获取
+        symbol: 指数代码或标准行业名称 (如 "sh000001"或"半导体")，通过 MarketData 获取
         asset_type: "index" | "sector"
-        news_score: 新闻情绪分 (-1.0 ~ 1.0)
+        news_score: 新闻情绪分 (取值范围：-1.0 ~ 1.0)
     """
     logger.info(f"Analyzing {asset_type}: {symbol}")
 
@@ -261,31 +263,25 @@ def analyze_asset_sentiment(
         else:
             func_hist = data_source._fetch_sector_daily
 
-        # 获取稍长周期的数据 (e.g., 40d) 以确保剔除当天数据和节假日后仍有足够样本
-        df_hist = func_hist(symbol, period="40d")
+        # 获取稍长周期的数据 (60天) 以确保剔除当天数据和节假日后仍有足够样本
+        df_hist = func_hist(symbol, period="60d")
 
         if isinstance(df_hist, str) or not isinstance(df_hist, pd.DataFrame) or df_hist.empty:
             return {"error": f"Invalid or empty history data received: {df_hist}"}
 
         # 目标: 确保 df_hist 只包含到上一个交易日的数据
-        try:
-            # 假设df_hist的索引是pandas.DatetimeIndex
-            # 使用中国时区(UTC+8)获取“今天”的日期
-            today = datetime.now(timezone(timedelta(hours=8))).date()
-            
-            # 检查最后一条数据的日期是否是今天
-            if not df_hist.empty and df_hist.index[-1].date() == today:
-                # 如果是今天，则移除最后一行
-                logger.info(f"Removing today's incomplete data for {symbol} to ensure statistical integrity.")
-                df_hist = df_hist.iloc[:-1]
-        except Exception as e:
-            # 如果索引不是日期类型或发生其他错误, 记录一个警告但继续
-            # 这种情况下模型结果的准确性可能会下降
-            logger.warning(f"Could not clean history data for {symbol}. Technical score may be inaccurate. Reason: {e}")
+        # 使用中国时区(UTC+8)获取“今天”的日期
+        today = datetime.now(timezone(timedelta(hours=8))).date()
+        
+        # 检查最后一条数据的日期是否是今天
+        if not df_hist.empty and df_hist['Date'].iloc[-1] == today:
+            # 如果是今天，则移除最后一行
+            logger.info(f"Removing today's incomplete data for {symbol} to ensure statistical integrity.")
+            df_hist = df_hist.iloc[:-1]
 
         # 在清洗后再次检查数据是否充足
-        if len(df_hist) < 20:
-            return {"error": f"History data insufficient after cleaning (requires > 20 days), found {len(df_hist)}."}
+        if len(df_hist) < 30:
+            return {"error": f"History data insufficient after cleaning (requires > 30 days), found {len(df_hist)}."}
 
 
         # Step 2: 获取实时快照
