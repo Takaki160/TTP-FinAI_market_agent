@@ -9,7 +9,7 @@
 *   **`client.py`**: 基于 LangGraph 编排。实现“快慢系统”逻辑，根据任务复杂度自动选择执行流。
 *   **`mcp_server_marketdata.py`**: 数据中台。对接 AkShare，提供清洗后的标准化行情 CSV 数据。
 *   **`mcp_server_marketnews.py`**: 情报中心。实时抓取新浪、财联社、同花顺的三大源滚动快讯。
-*   **`mcp_server_marketcolor.py`**: **核心计算引擎**。实现新闻情感与技术分布的量化融合算法。
+*   **`mcp_server_marketcolor.py`**: 核心计算引擎。实现新闻情感与技术分布的量化融合算法。
 *   **`mcp_server_reasoning.py`**: 认知引擎。强制 Agent 在执行复杂分析前输出思维链 (CoT)。
 
 ---
