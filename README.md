@@ -22,16 +22,20 @@
 系统获取目标资产过去 30 个交易日的对数收益率分布，计算当前实时价格在历史分布中的位置：
 
 1. **Z-Score 计算**:
+
 $$
 Z = \frac{x_{current} - \mu_{30d}}{\sigma_{30d}}
 $$
+
 - 其中 $x$ 为最新价，$\mu$ 为 30 日均价，$\sigma$ 为标准差。
 
 2. **概率映射 (Gaussian Error Function)**:
 - 使用高斯误差函数将 Z-Score 映射到 $[-1, 1]$ 的概率空间，作为技术面情绪分：
+
 $$
 S_{tech} = \text{erf}\left(\frac{Z}{\sqrt{2}}\right)
 $$
+
 - 注：若 $S_{tech} > 0.8$ 视为严重超买（超前情绪），$S_{tech} < -0.8$ 视为严重超跌。
 
 ### 2.2 舆情情感评分 ($S_{news}$)
@@ -41,11 +45,13 @@ $$
 系统根据信号的显著性（绝对值大小）自动分配权重：
 
 1. **自适应权重 ($W$)**:
+
 $$
 W_{news} = \frac{|S_{news}|}{|S_{news}| + |S_{tech}|}, \quad W_{tech} = 1 - W_{news}
 $$
 
 2. **最终情绪得分 ($Score_{final}$)**:
+
 $$
 Score_{final} = S_{news} \cdot W_{news} + S_{tech} \cdot W_{tech}
 $$
