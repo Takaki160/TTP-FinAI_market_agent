@@ -59,16 +59,24 @@ def _stat_normalize(z_score: float) -> float:
     return math.erf(z_score / math.sqrt(2))
 
 
-def _calculate_z_score(val: float, history: pd.Series) -> float:
+def _calculate_z_score(val: float, history: pd.Series, span: int = 20) -> float:
     """
-    计算标准分 Z-Score，表示当前值相对于历史分布的偏离程度。
+    计算指数加权标准分 (EW Z-Score)。
+    使用 EWM (Exponentially Weighted Moving) 统计量，使模型对近期波动更敏感。
     """
     if history.empty:
         return 0.0
-    std_dev = history.std(ddof=1) # 使用 ddof=1 计算样本标准差 (无偏估计)
-    if pd.isna(std_dev) or std_dev == 0:
+    
+    # 计算指数加权移动平均和标准差
+    # span=20 相当于 20 日指数平滑
+    ewm = history.ewm(span=span, adjust=True)
+    ewm_mean = ewm.mean().iloc[-1]
+    ewm_std = ewm.std().iloc[-1]
+    
+    if pd.isna(ewm_std) or ewm_std == 0:
         return 0.0
-    return (val - history.mean()) / std_dev
+        
+    return (val - ewm_mean) / ewm_std
 
 
 # --- 2. 实时数据获取 ---
@@ -271,10 +279,10 @@ def analyze_asset_sentiment(
 
         # 目标: 确保 df_hist 只包含到上一个交易日的数据
         # 使用中国时区(UTC+8)获取“今天”的日期
-        today = datetime.now(timezone(timedelta(hours=8))).date()
+        today_str = datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d")
         
         # 检查最后一条数据的日期是否是今天
-        if not df_hist.empty and df_hist['Date'].iloc[-1] == today:
+        if not df_hist.empty and str(df_hist['Date'].iloc[-1]) == today_str:
             # 如果是今天，则移除最后一行
             logger.info(f"Removing today's incomplete data for {symbol} to ensure statistical integrity.")
             df_hist = df_hist.iloc[:-1]
